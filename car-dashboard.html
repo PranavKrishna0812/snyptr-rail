@@ -1,0 +1,2862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SNYPTR — 2D Car Manual Arrow Drive (No Distance Parameters)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* AUTHENTIC MILITARY PALETTE */
+      --mil-canvas: #ded8ce;
+      --mil-canvas-tint: #e8e4dc;
+      --mil-card-bg: #f5f2ec;
+      --mil-white: #ffffff;
+      
+      --mil-dark: #242923;
+      --mil-dark-card: #2f352e;
+      --mil-dark-border: #1a1e19;
+      --mil-border-light: #c8c2b5;
+      
+      --text-dark: #1b1f1a;
+      --text-muted: #5e665c;
+      --text-light: #f5f5f3;
+      --text-sand: #d6cfc3;
+      
+      --mil-hit: #2c5934;
+      --mil-miss: #8a2a2a;
+      --mil-accent: #c49a45;
+      --mil-drive: #1f8a4c;
+      --mil-rev: #bf4324;
+      
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+    }
+
+    @keyframes optimalHitPulse {
+      0% {
+        stroke: #2cff55;
+        stroke-width: 2.4px;
+        fill: rgba(44, 255, 85, 0.15);
+        filter: drop-shadow(0 0 0px #2cff55);
+      }
+      50% {
+        stroke: #ffffff;
+        stroke-width: 5.5px;
+        fill: rgba(44, 255, 85, 0.65);
+        filter: drop-shadow(0 0 16px #2cff55);
+      }
+      100% {
+        stroke: #2cff55;
+        stroke-width: 2.4px;
+        fill: rgba(44, 255, 85, 0.15);
+        filter: drop-shadow(0 0 0px #2cff55);
+      }
+    }
+    .optimal-hit-active {
+      animation: optimalHitPulse 0.4s ease-in-out 4;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: var(--mil-canvas);
+      color: var(--text-dark);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: var(--mil-canvas-tint);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--mil-border-light);
+      border-radius: 2px;
+    }
+
+    .ref-panel {
+      background-color: var(--mil-card-bg);
+      border: 1px solid var(--mil-border-light);
+      box-shadow: 0 2px 6px rgba(36, 41, 35, 0.08);
+    }
+
+    .ref-btn {
+      background-color: var(--mil-dark);
+      color: var(--text-light);
+      border: 1px solid var(--mil-dark-border);
+      padding: 6px 12px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.12s ease;
+      text-transform: uppercase;
+    }
+    .ref-btn:hover:not(:disabled) {
+      background-color: #384036;
+      border-color: #4b5548;
+    }
+    .ref-btn:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+    .ref-btn-accent {
+      background-color: var(--mil-hit);
+      border-color: #1e3f24;
+      color: #ffffff;
+    }
+    .ref-btn-accent:hover:not(:disabled) {
+      background-color: #356b3f;
+    }
+
+    /* 2D CAR D-PAD CONTROLLER */
+    .dpad-container {
+      display: grid;
+      grid-template-columns: 80px 80px 80px;
+      grid-template-rows: 75px 75px 75px;
+      gap: 8px;
+      justify-content: center;
+      align-items: center;
+      margin: 6px auto;
+    }
+
+    .dpad-btn {
+      background: #2a3129;
+      border: 2px solid #1a1e18;
+      color: #e5e0d8;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.08s ease;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.1);
+    }
+    .dpad-btn:hover {
+      background: #394237;
+      border-color: #4f5a4c;
+    }
+    .dpad-btn:active, .dpad-btn.active {
+      background: var(--mil-drive);
+      border-color: #14582f;
+      color: #ffffff;
+      transform: translateY(2px) scale(0.97);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4), 0 0 16px rgba(31, 138, 76, 0.6);
+    }
+    .dpad-btn.btn-reverse:active, .dpad-btn.btn-reverse.active {
+      background: var(--mil-rev);
+      border-color: #8c2a12;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4), 0 0 16px rgba(191, 67, 36, 0.6);
+    }
+    .dpad-btn.btn-brake:active, .dpad-btn.btn-brake.active {
+      background: var(--mil-miss);
+      border-color: #5c1818;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4), 0 0 16px rgba(138, 42, 42, 0.6);
+    }
+
+    .dpad-key-badge {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 900;
+      line-height: 1;
+    }
+    .dpad-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      margin-top: 3px;
+      opacity: 0.85;
+    }
+
+    /* GEAR SELECTOR */
+    .gear-box {
+      display: flex;
+      background: #1b201a;
+      border: 1px solid #363d33;
+      padding: 4px;
+      border-radius: 4px;
+      gap: 4px;
+      justify-content: space-between;
+    }
+    .gear-item {
+      flex: 1;
+      text-align: center;
+      padding: 4px 0;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 800;
+      color: #727a6f;
+      border-radius: 3px;
+      transition: all 0.15s ease;
+    }
+    .gear-item.active-gear {
+      background: #ffffff;
+      color: #111410;
+      box-shadow: 0 0 10px rgba(255,255,255,0.4);
+    }
+    .gear-item.gear-p.active-gear { background: #d9534f; color: #fff; }
+    .gear-item.gear-r.active-gear { background: #f0ad4e; color: #111; }
+    .gear-item.gear-n.active-gear { background: #889285; color: #fff; }
+    .gear-item.gear-d.active-gear { background: #5cb85c; color: #fff; }
+
+    /* 2D CAR TRACK */
+    .track-canvas {
+      width: 100%;
+      height: 140px;
+      background: #181d17;
+      border: 2px solid #2d352b;
+      position: relative;
+      overflow: hidden;
+      box-shadow: inset 0 4px 16px rgba(0,0,0,0.6);
+      border-radius: 4px;
+    }
+    .track-rail-groove {
+      position: absolute;
+      top: 50%;
+      left: 20px;
+      right: 20px;
+      height: 10px;
+      transform: translateY(-50%);
+      background: #283026;
+      border-top: 2px solid #111510;
+      border-bottom: 2px solid #3f4a3d;
+      border-radius: 5px;
+    }
+    .track-center-dash {
+      position: absolute;
+      top: 50%;
+      left: 20px;
+      right: 20px;
+      height: 2px;
+      transform: translateY(-50%);
+      background: repeating-linear-gradient(90deg, #ffcc00 0px, #ffcc00 12px, transparent 12px, transparent 24px);
+      opacity: 0.5;
+    }
+    .track-bumper-left, .track-bumper-right {
+      position: absolute;
+      top: 20px;
+      bottom: 20px;
+      width: 14px;
+      background: repeating-linear-gradient(45deg, #ffcc00, #ffcc00 6px, #1a1e18 6px, #1a1e18 12px);
+      border: 1px solid #111510;
+    }
+    .track-bumper-left { left: 6px; border-radius: 3px 0 0 3px; }
+    .track-bumper-right { right: 6px; border-radius: 0 3px 3px 0; }
+
+    /* CAR AVATAR */
+    .car-avatar {
+      position: absolute;
+      top: 50%;
+      width: 90px;
+      height: 64px;
+      transform: translate(-50%, -50%);
+      transition: left 0.08s linear;
+      cursor: grab;
+      filter: drop-shadow(0 6px 12px rgba(0,0,0,0.6));
+    }
+    .car-avatar:active { cursor: grabbing; }
+
+    /* LIGHT BEAMS */
+    .headlight-beam {
+      position: absolute;
+      top: 16px;
+      left: 80px;
+      width: 90px;
+      height: 32px;
+      background: radial-gradient(ellipse at left, rgba(255, 235, 140, 0.45) 0%, rgba(255, 235, 140, 0) 70%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .taillight-beam {
+      position: absolute;
+      top: 18px;
+      right: 80px;
+      width: 50px;
+      height: 28px;
+      background: radial-gradient(ellipse at right, rgba(255, 60, 60, 0.45) 0%, rgba(255, 60, 60, 0) 70%);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .driving-forward .headlight-beam { opacity: 1; }
+    .driving-reverse .taillight-beam { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- Full Screen Flex Container -->
+  <div style="display: flex; flex-direction: column; width: 100vw; height: 100vh; overflow: hidden;">
+    
+    <!-- Top System Bar -->
+    <header style="
+      background-color: var(--mil-dark);
+      border-bottom: 2px solid var(--mil-dark-border);
+      padding: 8px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-light);
+      flex-shrink: 0;
+    ">
+      <!-- Title & Branding -->
+      <div style="display: flex; align-items: baseline; gap: 12px;">
+        <span style="
+          font-family: var(--font-mono);
+          font-weight: 900;
+          font-size: 18px;
+          letter-spacing: 0.12em;
+          color: #ffffff;
+        ">
+          SNYPTR
+        </span>
+        <span style="
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 700;
+          padding: 2px 7px;
+          background-color: #3b4538;
+          color: #c9d6c5;
+          letter-spacing: 0.08em;
+        ">
+          2D CAR // ARROW DRIVE COCKPIT
+        </span>
+        <div style="
+          font-size: 11px;
+          font-family: var(--font-mono);
+          color: var(--text-sand);
+          text-transform: uppercase;
+        ">
+          PURE RC MANUAL DRIVE (NO DISTANCE LIMITERS)
+        </div>
+      </div>
+
+      <!-- Right Actions: Switcher & Serial Connect -->
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <!-- Switch to Distance Dashboard -->
+        <a href="dashboard.html" class="ref-btn" style="text-decoration: none; background-color: #212620; border-color: #394236;" title="Open standard distance dashboard with coordinates and meters">
+          SWITCH TO DISTANCE DASHBOARD ↗
+        </a>
+
+        <!-- Serial Connect Button -->
+        <button id="btnConnectSerial" onclick="toggleConnectSerial()" class="ref-btn ref-btn-accent" style="display: flex; align-items: center; gap: 6px;">
+          <span id="serialStatusDot" style="width: 7px; height: 7px; border-radius: 50%; background-color: #ffcc00; display: inline-block;"></span>
+          <span id="serialStatusText">CONNECT ESP32</span>
+        </button>
+
+        <!-- System Pill -->
+        <span id="headerSysStatus" style="
+          background-color: #353c34;
+          color: #ffffff;
+          padding: 5px 10px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 700;
+        ">
+          SYS: READY
+        </span>
+
+        <button onclick="toggleTerminalModal()" class="ref-btn" style="background-color: #2c322b;">
+          LOG / TERMINAL
+        </button>
+      </div>
+    </header>
+
+    <!-- Sub-Bar Quick Command Strip -->
+    <div style="
+      background-color: #1e221d;
+      padding: 5px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-sand);
+      border-bottom: 1px solid var(--mil-border-light);
+      flex-shrink: 0;
+    ">
+      <div style="display: flex; gap: 14px; font-weight: 600;">
+        <span><b style="color: #ffffff;">[► / →]</b> DRIVE RIGHT</span>
+        <span><b style="color: #ffffff;">[◄ / ←]</b> DRIVE LEFT</span>
+        <span><b style="color: #ffffff;">[SPACE]</b> STOP MOTOR</span>
+        <span><b style="color: #ffffff;">[1–4]</b> MOTOR SPEED</span>
+        <span><b style="color: #ffffff;">[+][-]</b> SPEED NUDGE</span>
+        <span><b style="color: #ffffff;">[0]</b> POP TARGET</span>
+      </div>
+
+      <div id="subbarNotice" style="color: #9a9486; font-size: 10px;">
+        FREE MANUAL DRIVE // ADJUST SPEED WITH SLIDER OR KEYS [1]–[4] // YOU DETERMINE WHEN TO STOP
+      </div>
+    </div>
+
+    <!-- Main Workspace -->
+    <main style="
+      flex: 1;
+      padding: 10px 16px;
+      display: grid;
+      grid-template-columns: minmax(380px, 1.05fr) minmax(520px, 1.45fr);
+      gap: 10px;
+      min-height: 0;
+    ">
+      
+      <!-- LEFT COLUMN: Dual-Mode Live Camera & Target Stage -->
+      <div class="ref-panel" style="display: flex; flex-direction: column; height: 100%; padding: 10px; min-height: 0;">
+        <!-- Header with View Mode Switcher -->
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--mil-border-light); padding-bottom: 6px;">
+          <!-- Mode Tabs -->
+          <div style="display: flex; gap: 4px;">
+            <button id="tabModeCamera" onclick="switchTargetView('camera')" class="ref-btn ref-btn-accent" style="padding: 3px 8px; font-size: 10px;">
+              OPTICAL CAM [LIVE]
+            </button>
+            <button id="tabModeSim" onclick="switchTargetView('sim')" class="ref-btn" style="padding: 3px 8px; font-size: 10px; background-color: #2b3329;">
+              TARGET CANVAS
+            </button>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span id="camStatusDot" style="width: 7px; height: 7px; border-radius: 50%; background-color: #2cff55; display: inline-block;"></span>
+            <span id="camStatusBadge" style="font-family: var(--font-mono); font-size: 10px; font-weight: 800; color: var(--mil-hit);">
+              STREAM ONLINE
+            </span>
+          </div>
+        </div>
+
+        <!-- Camera Source Selector & USB / WiFi Switcher Strip -->
+        <div style="
+          margin-top: 6px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: #ffffff;
+          border: 1px solid var(--mil-border-light);
+          padding: 4px 8px;
+        ">
+          <span style="font-family: var(--font-mono); font-size: 9.5px; font-weight: 800; color: var(--text-dark); white-space: nowrap;">
+            📡 P4 STANDALONE TELEMETRY (HIT / MISS ONLY):
+          </span>
+          <span id="shotResultBadge" style="
+            flex: 1;
+            padding: 3px 8px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 800;
+            text-align: center;
+            background: #141a14;
+            color: #2cff55;
+            border: 1px solid #2cff55;
+            border-radius: 3px;
+          ">
+            READY — CLICK POP TARGET 1 TO ARM
+          </span>
+          <button onclick="resetShots()" class="ref-btn" style="padding: 3px 8px; font-size: 9px; font-weight: 800; background-color: #2b4530;">
+            🔄 RESET
+          </button>
+          <!-- Hidden legacy camera controls for JS compatibility -->
+          <select id="cameraSourceSelect" style="display:none;"><option value="wifi">WiFi</option></select>
+          <button id="btnConnectCamSerial" style="display:none;"></button>
+          <button id="btnCalibrateBaseline" style="display:none;"></button>
+          <span id="baselineStatusBadge" style="display:none;">[ARMED]</span>
+          <button id="btnToggleCamPower" style="display:none;"></button>
+        </div>
+
+        <!-- Optional WiFi Stream URL (shown only when WiFi MJPEG is selected) -->
+        <div id="wifiStreamRow" style="
+          display: none;
+          margin-top: 4px;
+          align-items: center;
+          gap: 6px;
+          background: #ffffff;
+          border: 1px solid var(--mil-border-light);
+          padding: 3px 8px;
+        ">
+          <span style="font-family: var(--font-mono); font-size: 9px; font-weight: 800; color: var(--text-muted); white-space: nowrap;">
+            WIFI URL:
+          </span>
+          <input
+            id="cameraStreamUrlInput"
+            type="text"
+            value="http://192.168.4.1/"
+            placeholder="http://192.168.4.1/"
+            style="flex: 1; padding: 2px 4px; font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--mil-border-light);"
+          />
+          <button onclick="reloadCameraStream()" class="ref-btn" style="padding: 2px 6px; font-size: 9px;">
+            CONNECT URL
+          </button>
+        </div>
+
+        <!-- Main Display Viewport (Camera Stream OR Target Canvas) -->
+        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding-top: 8px; min-height: 0;">
+          
+          <!-- Exposure Timer Bar -->
+          <div style="width: 100%; max-width: 320px;">
+            <div style="display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--text-muted); margin-bottom: 3px;">
+              <span>5.0s EXPOSURE TIMER</span>
+              <span id="exposureTimerLabel" style="color: var(--text-dark);">READY</span>
+            </div>
+            <div style="width: 100%; height: 5px; background: var(--mil-canvas-tint); border: 1px solid var(--mil-border-light); overflow: hidden;">
+              <div id="exposureProgressBar" style="width: 100%; height: 100%; background: var(--mil-dark); transition: width 0.1s linear;"></div>
+            </div>
+          </div>
+
+          <!-- Video / Target Viewport Container -->
+          <div style="position: relative; padding: 6px; background-color: #2b302a; border: 1px solid #1a1e19; box-shadow: 0 4px 16px rgba(0,0,0,0.25);">
+            
+            <!-- OPTICAL CAMERA VIEW -->
+            <div id="cameraViewportContainer" style="
+              width: 270px;
+              height: 270px;
+              position: relative;
+              background-color: #0d0f0c;
+              border: 1px solid #3d463b;
+              overflow: hidden;
+              cursor: crosshair;
+            " onclick="handleCameraFeedClick(event)">
+              
+              <!-- Direct USB UVC Camera Video Element (Default for directly connected ESP32-P4) -->
+              <video
+                id="webcamVideo"
+                autoplay
+                playsinline
+                muted
+                style="width: 100%; height: 100%; object-fit: cover; display: none;"
+              ></video>
+
+              <!-- ESP32 MJPEG Live Stream Image (WiFi mode) -->
+              <img
+                id="espCameraImg"
+                src=""
+                alt="ESP32 Camera Stream"
+                style="width: 100%; height: 100%; object-fit: cover; display: none;"
+                onload="onCameraStreamLoad()"
+                onerror="onCameraStreamError()"
+              />
+
+              <!-- Nerf Bullet Stuck Optimal Detection HUD Banner -->
+              <div id="nerfOptimalHudBanner" style="
+                display: none;
+                position: absolute;
+                top: 14px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(17, 34, 17, 0.94);
+                border: 2px solid #2cff55;
+                color: #2cff55;
+                padding: 5px 14px;
+                font-family: var(--font-mono);
+                font-size: 10.5px;
+                font-weight: 800;
+                letter-spacing: 0.8px;
+                border-radius: 4px;
+                box-shadow: 0 0 18px rgba(44, 255, 85, 0.7);
+                z-index: 50;
+                pointer-events: none;
+                text-align: center;
+                white-space: nowrap;
+              ">
+                🎯 OPTIMAL HIT! YELLOW NERF BULLET STUCK
+              </div>
+
+              <!-- Tactical Reticle & Calibration Rings Overlay -->
+              <svg id="cameraReticleSvg" viewBox="0 0 270 270" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;">
+                <!-- Crosshairs -->
+                <line x1="135" y1="0" x2="135" y2="270" stroke="rgba(255,204,0,0.6)" stroke-width="0.8" stroke-dasharray="3 3" />
+                <line x1="0" y1="135" x2="270" y2="135" stroke="rgba(255,204,0,0.6)" stroke-width="0.8" stroke-dasharray="3 3" />
+                
+                <!-- Entire Black Region - Tactical Green Optimal Zone Reticle -->
+                <circle id="optimalZoneCircle" cx="135" cy="135" r="82" fill="rgba(44, 255, 85, 0.12)" stroke="#2cff55" stroke-width="2.4" />
+                <circle id="optimalZoneRingDashed" cx="135" cy="135" r="82" fill="none" stroke="#2cff55" stroke-width="1.0" stroke-dasharray="4 3" />
+                <circle cx="135" cy="135" r="3.5" fill="#2cff55" />
+                
+                <!-- Optimal Zone Sight Ticks along r=82 border -->
+                <line x1="45" y1="135" x2="57" y2="135" stroke="#2cff55" stroke-width="2.5" />
+                <line x1="213" y1="135" x2="225" y2="135" stroke="#2cff55" stroke-width="2.5" />
+                <line x1="135" y1="45" x2="135" y2="57" stroke="#2cff55" stroke-width="2.5" />
+                <line x1="135" y1="213" x2="135" y2="225" stroke="#2cff55" stroke-width="2.5" />
+                
+                <!-- Optimal Zone Label -->
+                <text id="optimalZoneLabel" x="135" y="42" text-anchor="middle" fill="#2cff55" font-size="7.5" font-family="monospace" font-weight="900" letter-spacing="0.6">OPTIMAL ZONE (BLACK REGION)</text>
+                
+                <!-- Inner Tactical Sub-Rings -->
+                <circle cx="135" cy="135" r="26" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="0.8" stroke-dasharray="2 2" />
+                <circle cx="135" cy="135" r="54" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="0.8" stroke-dasharray="2 2" />
+                
+                <!-- Corner Framing Brackets -->
+                <path d="M 15 35 L 15 15 L 35 15" fill="none" stroke="#2cff55" stroke-width="2" />
+                <path d="M 255 35 L 255 15 L 235 15" fill="none" stroke="#2cff55" stroke-width="2" />
+                <path d="M 15 235 L 15 255 L 35 255" fill="none" stroke="#2cff55" stroke-width="2" />
+                <path d="M 255 235 L 255 255 L 235 255" fill="none" stroke="#2cff55" stroke-width="2" />
+                
+                <!-- HUD Text -->
+                <text x="20" y="28" fill="#2cff55" font-size="8" font-family="monospace" font-weight="800">CAM: OPTICAL 1X</text>
+                <text x="20" y="246" fill="#2cff55" font-size="8" font-family="monospace" font-weight="700">RETICLE: GREEN = OPTIMAL ZONE</text>
+                <text id="hudCvTelemetry" x="20" y="258" fill="#2cff55" font-size="7.5" font-family="monospace" font-weight="700">CV: STANDBY [AWAITING STREAM]</text>
+              </svg>
+
+              <!-- Dynamic Impact Dots Overlay on Camera -->
+              <div id="camImpactDotsContainer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></div>
+
+              <!-- Fallback Connecting Notice -->
+              <div id="cameraOfflineNotice" style="
+                display: none;
+                position: absolute;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background-color: rgba(13,15,12,0.92);
+                color: #ffcc00;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                padding: 16px;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                gap: 8px;
+              ">
+                <div style="font-weight: 800; color: #ff7777; font-size: 12px;">CAMERA FEED OFFLINE</div>
+                <div id="cameraOfflineDesc" style="font-size: 9px; color: #d6cfc3;">
+                  ESP32-P4 USB camera or WiFi stream not detected.
+                </div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;">
+                  <button onclick="refreshCameraDevices()" class="ref-btn ref-btn-accent" style="padding: 3px 8px; font-size: 9px;">SCAN USB CAMERAS</button>
+                  <button onclick="reloadCameraStream()" class="ref-btn" style="padding: 3px 8px; font-size: 9px;">RETRY WIFI</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- SIMULATED TARGET VIEW (CANVAS) -->
+            <div id="simTargetContainer" style="
+              width: 270px;
+              height: 270px;
+              background-color: #ffffff;
+              position: relative;
+              cursor: crosshair;
+              border: 1px solid #c8c2b5;
+              overflow: hidden;
+              display: none;
+            " onclick="handleTargetClick(event)">
+              <div id="targetFace" style="width: 100%; height: 100%; position: relative; transition: transform 0.28s ease, opacity 0.28s ease;">
+                <svg viewBox="0 0 150 150" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; pointer-events: none;">
+                  <rect x="2" y="2" width="146" height="146" fill="none" stroke="#242923" stroke-width="1.2" />
+                  <line x1="75" y1="0" x2="75" y2="150" stroke="#7a8277" stroke-width="0.5" stroke-dasharray="2 2" />
+                  <line x1="0" y1="75" x2="150" y2="75" stroke="#7a8277" stroke-width="0.5" stroke-dasharray="2 2" />
+                  <circle cx="75" cy="75" r="66" fill="none" stroke="#242923" stroke-width="1.0" />
+                  <circle cx="75" cy="75" r="50" fill="none" stroke="#242923" stroke-width="1.2" />
+                  <circle cx="75" cy="75" r="35" fill="none" stroke="#1a1e19" stroke-width="1.4" />
+                  <circle cx="75" cy="75" r="20" fill="none" stroke="#1a1e19" stroke-width="1.6" stroke-dasharray="3 1.5" />
+                  <circle cx="75" cy="75" r="3" fill="#1a1e19" />
+                  <line x1="70" y1="75" x2="80" y2="75" stroke="#ffffff" stroke-width="0.75" />
+                  <line x1="75" y1="70" x2="75" y2="80" stroke="#ffffff" stroke-width="0.75" />
+                  <rect x="50" y="50" width="50" height="50" fill="rgba(44, 89, 52, 0.08)" stroke="#2c5934" stroke-width="1.8" stroke-dasharray="4 2" />
+                </svg>
+                <div id="impactDotsContainer" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; pointer-events: none;"></div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Bottom Action Buttons: Pop Target, Snapshot, Multi-Target Control -->
+          <div style="display: flex; flex-direction: column; gap: 5px; width: 100%; max-width: 320px;">
+            <div style="display: flex; gap: 6px;">
+              <button onclick="handlePopCommand(1, 5.0)" class="ref-btn ref-btn-accent" style="flex: 1; padding: 6px; font-size: 11px; font-weight: 800;" title="Shortcut: 0 - Pop Target 1 for 5 seconds">
+                POP TARGET 1 (5s) [0]
+              </button>
+              <button onclick="takeCameraSnapshot()" class="ref-btn" style="flex: 1; padding: 6px; font-size: 10px; background-color: #384236;" title="Capture high-resolution still snapshot from camera">
+                CAPTURE SNAPSHOT
+              </button>
+            </div>
+
+            <!-- Servo Pop Controller (Channels 1, 2, 3 + Drop All) -->
+            <div style="
+              background: #ffffff;
+              border: 1px solid var(--mil-border-light);
+              padding: 5px 8px;
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+            ">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-family: var(--font-mono); font-size: 9px; font-weight: 800; color: var(--text-dark);">
+                  SERVO POP CONTROLLER (COM7)
+                </span>
+                <span id="servoStatusBadge" style="font-family: var(--font-mono); font-size: 8px; font-weight: 800; color: var(--mil-hit);">
+                  READY
+                </span>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr) 1.2fr; gap: 4px;">
+                <button onclick="toggleSingleServo(1)" id="btnServo1" class="ref-btn" style="padding: 4px 2px; font-size: 9px;" title="Toggle Target 1 (Channel 0)">
+                  T1 [TOGGLE]
+                </button>
+                <button onclick="toggleSingleServo(2)" id="btnServo2" class="ref-btn" style="padding: 4px 2px; font-size: 9px;" title="Toggle Target 2 (Channel 1)">
+                  T2 [TOGGLE]
+                </button>
+                <button onclick="toggleSingleServo(3)" id="btnServo3" class="ref-btn" style="padding: 4px 2px; font-size: 9px;" title="Toggle Target 3 (Channel 2)">
+                  T3 [TOGGLE]
+                </button>
+                <button onclick="sendPopServo('ALL_DOWN')" class="ref-btn" style="padding: 4px 2px; font-size: 9px; background-color: #5c1818;" title="Drop All 7 Targets (DOWN,ALL)">
+                  DROP ALL
+                </button>
+              </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 9px;">
+              <span id="servoActivePosLabel" style="color: var(--text-muted);">Target 1: Concealed (DOWN)</span>
+              <button onclick="resetShots()" class="ref-btn" style="padding: 2px 8px; font-size: 9px; background-color: #353d33;">CLEAR SHOTS</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: 2D Car Track & D-PAD Arrow Cockpit -->
+      <div style="display: flex; flex-direction: column; gap: 10px; height: 100%; min-height: 0;">
+        
+        <!-- 2D CAR TRACK VISUALIZER -->
+        <div class="ref-panel" style="padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; text-transform: uppercase;">
+              2D CAR RAIL RUNWAY // REAL-TIME TOP-DOWN TRACK
+            </span>
+            <span id="carMotionStateBadge" style="font-family: var(--font-mono); font-size: 10px; font-weight: 800; padding: 2px 8px; background-color: #242923; color: #fff;">
+              PARKED [IDLE]
+            </span>
+          </div>
+
+          <!-- Overhead Track View -->
+          <div id="trackCanvasContainer" class="track-canvas">
+            <div class="track-bumper-left" title="Start Limit Bumper"></div>
+            <div class="track-bumper-right" title="End Limit Bumper"></div>
+            <div class="track-rail-groove"></div>
+            <div class="track-center-dash"></div>
+
+            <!-- Dynamic 2D Target Car Carriage -->
+            <div id="carAvatar" class="car-avatar" style="left: 20%;">
+              <div class="headlight-beam"></div>
+              <div class="taillight-beam"></div>
+
+              <!-- SVG 2D Car / Tactical Target Cart -->
+              <svg viewBox="0 0 90 64" style="width: 100%; height: 100%; overflow: visible;">
+                <!-- Shadow -->
+                <rect x="6" y="8" width="78" height="48" rx="6" fill="rgba(0,0,0,0.5)" filter="blur(2px)" />
+                <!-- 4 Rugged All-Terrain Wheels -->
+                <rect x="10" y="2" width="18" height="9" rx="2" fill="#151714" stroke="#333" stroke-width="1" />
+                <rect x="62" y="2" width="18" height="9" rx="2" fill="#151714" stroke="#333" stroke-width="1" />
+                <rect x="10" y="53" width="18" height="9" rx="2" fill="#151714" stroke="#333" stroke-width="1" />
+                <rect x="62" y="53" width="18" height="9" rx="2" fill="#151714" stroke="#333" stroke-width="1" />
+
+                <!-- Main Tactical Chassis -->
+                <rect x="8" y="10" width="74" height="44" rx="5" fill="#384236" stroke="#1d221c" stroke-width="2" />
+                <!-- Armor Plates & Hood -->
+                <polygon points="12,14 42,14 48,22 12,22" fill="#465243" />
+                <polygon points="12,50 42,50 48,42 12,42" fill="#465243" />
+                
+                <!-- Target Mount Ring on Car Roof -->
+                <circle cx="45" cy="32" r="16" fill="#242923" stroke="#ffcc00" stroke-width="1.5" />
+                <circle cx="45" cy="32" r="10" fill="#ded8ce" stroke="#242923" stroke-width="1" />
+                <circle cx="45" cy="32" r="4" fill="#8a2a2a" />
+
+                <!-- Front Headlights (Facing Right/Forward) -->
+                <rect x="80" y="14" width="3" height="8" rx="1" fill="#ffe066" stroke="#998000" stroke-width="0.5" />
+                <rect x="80" y="42" width="3" height="8" rx="1" fill="#ffe066" stroke="#998000" stroke-width="0.5" />
+
+                <!-- Rear Taillights (Facing Left/Reverse) -->
+                <rect x="7" y="14" width="3" height="7" rx="1" fill="#ff3333" stroke="#800000" stroke-width="0.5" />
+                <rect x="7" y="43" width="3" height="7" rx="1" fill="#ff3333" stroke="#800000" stroke-width="0.5" />
+
+                <!-- Bullbar / Front Bumper -->
+                <line x1="83" y1="12" x2="83" y2="52" stroke="#151714" stroke-width="2.5" stroke-linecap="round" />
+              </svg>
+            </div>
+          </div>
+
+          <!-- Runway Indicators -->
+          <div style="display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--text-muted); padding: 0 4px;">
+            <span>◄ REVERSE DOCK (LEFT END)</span>
+            <span id="trackCarRelativeLabel" style="color: var(--text-dark); font-weight: 800;">READY TO DRIVE</span>
+            <span>FORWARD CRUISE (RIGHT END) ►</span>
+          </div>
+        </div>
+
+        <!-- 2D CAR COCKPIT & D-PAD CONTROLLER DECK -->
+        <div class="ref-panel" style="flex: 1; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; min-height: 0;">
+          
+          <!-- Top Telemetry: Gear Box & Throttle Meter -->
+          <div style="display: grid; grid-template-columns: 180px 1fr 140px; gap: 12px; align-items: center; border-bottom: 1px solid var(--mil-border-light); padding-bottom: 10px;">
+            
+            <!-- Transmission Gear Box -->
+            <div>
+              <div style="font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">
+                TRANSMISSION GEAR
+              </div>
+              <div class="gear-box">
+                <div id="gearP" class="gear-item gear-p active-gear">P</div>
+                <div id="gearR" class="gear-item gear-r">R</div>
+                <div id="gearN" class="gear-item gear-n">N</div>
+                <div id="gearD" class="gear-item gear-d">D</div>
+              </div>
+            </div>
+
+            <!-- Throttle Bar -->
+            <div>
+              <div style="display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">
+                <span>MOTOR THROTTLE POWER</span>
+                <span id="throttlePercentLabel" style="color: var(--text-dark); font-weight: 800;">0% [IDLE]</span>
+              </div>
+              <div style="width: 100%; height: 16px; background: #1c221a; border: 1px solid #363e33; border-radius: 3px; overflow: hidden; padding: 2px;">
+                <div id="throttleBar" style="
+                  width: 0%;
+                  height: 100%;
+                  background: linear-gradient(90deg, #1f8a4c 0%, #ffcc00 70%, #d9534f 100%);
+                  transition: width 0.15s ease-out;
+                  border-radius: 2px;
+                "></div>
+              </div>
+            </div>
+
+            <!-- Drive Mode Switcher -->
+            <div style="text-align: right;">
+              <div style="font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px;">
+                CONTROL MODE
+              </div>
+              <button id="btnDriveModeToggle" onclick="toggleDriveMode()" class="ref-btn" style="width: 100%; padding: 4px 6px; font-size: 10px; background-color: #2b3329;">
+                HOLD TO DRIVE
+              </button>
+            </div>
+
+          </div>
+
+          <!-- DYNAMIC MOTOR SPEED CONTROL PANEL -->
+          <div style="
+            background: #ffffff;
+            border: 1px solid var(--mil-border-light);
+            padding: 8px 12px;
+            margin: 6px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+          ">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: var(--text-dark);">
+                MOTOR SPEED: <span id="speedValueLabel" style="color: var(--mil-hit); font-size: 13px;">100%</span>
+                <span id="speedMetricLabel" style="color: var(--text-muted); font-size: 10px; font-weight: 600;">(~24.4 cm/sec)</span>
+              </div>
+              <div style="font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); font-weight: 700;">
+                SPEED KEYS: [1] CRAWL | [2] SLOW | [3] FAST | [4] MAX | [+][-] NUDGE
+              </div>
+            </div>
+
+            <!-- Speed Slider + Preset Buttons -->
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <input
+                id="speedSlider"
+                type="range"
+                min="15"
+                max="140"
+                value="100"
+                step="5"
+                oninput="onSpeedSliderChange(this.value)"
+                style="flex: 1; accent-color: var(--mil-hit); cursor: pointer; height: 6px;"
+                title="Adjust motor speed continuously from 15% to 140%"
+              />
+
+              <div style="display: flex; gap: 4px;">
+                <button onclick="setSpeed(30)" class="ref-btn speed-preset-btn" id="btnSpeed30" style="padding: 3px 6px; font-size: 9px;" title="Key 1: 30% (~7.3 cm/s)">1: CRAWL (30%)</button>
+                <button onclick="setSpeed(60)" class="ref-btn speed-preset-btn" id="btnSpeed60" style="padding: 3px 6px; font-size: 9px;" title="Key 2: 60% (~14.6 cm/s)">2: SLOW (60%)</button>
+                <button onclick="setSpeed(100)" class="ref-btn speed-preset-btn ref-btn-accent" id="btnSpeed100" style="padding: 3px 6px; font-size: 9px;" title="Key 3: 100% (~24.4 cm/s)">3: FAST (100%)</button>
+                <button onclick="setSpeed(130)" class="ref-btn speed-preset-btn" id="btnSpeed130" style="padding: 3px 6px; font-size: 9px;" title="Key 4: 130% (~31.7 cm/s)">4: MAX (130%)</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- THE 2D CAR D-PAD (ARROW KEY CONTROLLER) -->
+          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1;">
+            
+            <div class="dpad-container">
+              <!-- Empty Top-Left -->
+              <div></div>
+
+              <!-- UP ARROW: ACCELERATE / DRIVE RIGHT -->
+              <button
+                id="btnDpadUp"
+                class="dpad-btn"
+                onmousedown="startDriving('FWD')"
+                onmouseup="stopDriving('FWD')"
+                onmouseleave="stopDriving('FWD')"
+                ontouchstart="startDriving('FWD')"
+                ontouchend="stopDriving('FWD')"
+                title="Arrow Up [↑] / W: Drive Right / Forward"
+              >
+                <span class="dpad-key-badge">▲</span>
+                <span class="dpad-label">RIGHT [↑]</span>
+              </button>
+
+              <!-- Empty Top-Right -->
+              <div></div>
+
+              <!-- LEFT ARROW: DRIVE LEFT -->
+              <button
+                id="btnDpadLeft"
+                class="dpad-btn btn-reverse"
+                onmousedown="startDriving('REV')"
+                onmouseup="stopDriving('REV')"
+                onmouseleave="stopDriving('REV')"
+                ontouchstart="startDriving('REV')"
+                ontouchend="stopDriving('REV')"
+                title="Arrow Left [←] / A: Drive Left continuously"
+              >
+                <span class="dpad-key-badge">◄</span>
+                <span class="dpad-label">LEFT [←]</span>
+              </button>
+
+              <!-- CENTER: HANDBRAKE / STOP -->
+              <button
+                id="btnDpadStop"
+                class="dpad-btn btn-brake"
+                onclick="emergencyBrake()"
+                title="Spacebar: Stop Motor"
+              >
+                <span class="dpad-key-badge" style="font-size: 12px; font-weight: 900;">STOP</span>
+                <span class="dpad-label">[SPACE]</span>
+              </button>
+
+              <!-- RIGHT ARROW: DRIVE RIGHT -->
+              <button
+                id="btnDpadRight"
+                class="dpad-btn"
+                onmousedown="startDriving('FWD')"
+                onmouseup="stopDriving('FWD')"
+                onmouseleave="stopDriving('FWD')"
+                ontouchstart="startDriving('FWD')"
+                ontouchend="stopDriving('FWD')"
+                title="Arrow Right [→] / D: Drive Right continuously"
+              >
+                <span class="dpad-key-badge">►</span>
+                <span class="dpad-label">RIGHT [→]</span>
+              </button>
+
+              <!-- Empty Bottom-Left -->
+              <div></div>
+
+              <!-- DOWN ARROW: DRIVE LEFT -->
+              <button
+                id="btnDpadDown"
+                class="dpad-btn btn-reverse"
+                onmousedown="startDriving('REV')"
+                onmouseup="stopDriving('REV')"
+                onmouseleave="stopDriving('REV')"
+                ontouchstart="startDriving('REV')"
+                ontouchend="stopDriving('REV')"
+                title="Arrow Down [↓] / S: Drive Left"
+              >
+                <span class="dpad-key-badge">▼</span>
+                <span class="dpad-label">LEFT [↓]</span>
+              </button>
+
+              <!-- Empty Bottom-Right -->
+              <div></div>
+            </div>
+
+            <!-- Controller Legend Notice -->
+            <div style="font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--text-muted); text-align: center; margin-top: 4px;">
+              USE KEYBOARD <b style="color: var(--text-dark);">[←] [→] [↑] [↓]</b> OR CLICK / TOUCH D-PAD BUTTONS TO DRIVE
+            </div>
+          </div>
+
+          <!-- Bottom Emergency Bar -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <button onclick="emergencyBrake()" class="ref-btn" style="background-color: var(--mil-miss); padding: 8px;" title="Spacebar / ESC">
+              [SPACE] EMERGENCY BRAKE / STOP
+            </button>
+            <button onclick="driveToZero()" class="ref-btn" style="background-color: #2e342c; padding: 8px;" title="Key R">
+              [R] RETURN TO DOCK (START)
+            </button>
+          </div>
+
+        </div>
+
+      </div>
+
+    </main>
+
+  </div>
+
+  <!-- Terminal Modal for Serial Logs -->
+  <div id="terminalModal" style="
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 230px;
+    background-color: #171a16;
+    border-top: 2px solid #353c34;
+    padding: 10px 18px;
+    z-index: 100;
+    flex-direction: column;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+  ">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+      <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #ffffff;">
+        ESP32 SERIAL COMMUNICATION LOG — 2D CAR ARROW DRIVE
+      </span>
+      <div style="display: flex; gap: 6px;">
+        <button onclick="sendRawCommand('STATUS')" class="ref-btn" style="padding: 2px 8px; font-size: 10px;">QUERY STATUS</button>
+        <button onclick="clearTerminal()" class="ref-btn" style="padding: 2px 8px; font-size: 10px;">CLEAR</button>
+        <button onclick="toggleTerminalModal()" class="ref-btn" style="padding: 2px 8px; font-size: 10px; background-color: #444;">CLOSE [X]</button>
+      </div>
+    </div>
+    <div id="terminalOutput" style="
+      flex: 1;
+      background-color: #0d0f0c;
+      border: 1px solid #282d26;
+      padding: 8px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #9fe29e;
+    "></div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // 2D CAR DRIVING ENGINE & SERIAL COMM
+    // =========================================================================
+    let currentCarPct = 20.0;     // Visual position on track (0% to 100%)
+    let drivingDirection = null;  // 'FWD' or 'REV' or null
+    let isHoldToDrive = true;     // true = Hold key to drive / release to stop; false = Cruise mode
+    let driveAnimationId = null;
+
+    // Target Elevation & Shooting
+    let elevationState = 'UP';
+    let exposureSeconds = 5.0;
+    let exposureTimer = null;
+    let shots = [];
+
+    // Web Serial State
+    let port = null;
+    let reader = null;
+    let isConnected = false;
+
+    // Motor Speed Level (15% to 150%)
+    let motorSpeedPercent = 100;
+
+    // Track active key presses
+    const activeKeys = {
+      ArrowRight: false,
+      ArrowLeft: false,
+      ArrowUp: false,
+      ArrowDown: false,
+      w: false,
+      s: false,
+      a: false,
+      d: false
+    };
+
+    // --- KEYBOARD EVENT LISTENERS (2D CAR CONTROLS & SPEED) ---
+    window.addEventListener('keydown', (e) => {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
+
+      const key = e.key;
+
+      if (key === 'ArrowRight' || key === 'd' || key === 'D') {
+        e.preventDefault();
+        if (!activeKeys.ArrowRight) {
+          activeKeys.ArrowRight = true;
+          startDriving('FWD');
+        }
+      } else if (key === 'ArrowLeft' || key === 'a' || key === 'A') {
+        e.preventDefault();
+        if (!activeKeys.ArrowLeft) {
+          activeKeys.ArrowLeft = true;
+          startDriving('REV');
+        }
+      } else if (key === 'ArrowUp' || key === 'w' || key === 'W') {
+        e.preventDefault();
+        if (!activeKeys.ArrowUp) {
+          activeKeys.ArrowUp = true;
+          startDriving('FWD');
+        }
+      } else if (key === 'ArrowDown' || key === 's' || key === 'S') {
+        e.preventDefault();
+        if (!activeKeys.ArrowDown) {
+          activeKeys.ArrowDown = true;
+          startDriving('REV');
+        }
+      } else if (key === ' ' || key === 'Escape') {
+        e.preventDefault();
+        emergencyBrake();
+      } else if (key.toUpperCase() === 'R') {
+        e.preventDefault();
+        driveToZero();
+      } else if (key === '0') {
+        e.preventDefault();
+        handlePopCommand();
+      } else if (key === '1') {
+        e.preventDefault();
+        setSpeed(30);
+      } else if (key === '2') {
+        e.preventDefault();
+        setSpeed(60);
+      } else if (key === '3') {
+        e.preventDefault();
+        setSpeed(100);
+      } else if (key === '4') {
+        e.preventDefault();
+        setSpeed(130);
+      } else if (key === '+' || key === '=') {
+        e.preventDefault();
+        setSpeed(motorSpeedPercent + 10);
+      } else if (key === '-' || key === '_') {
+        e.preventDefault();
+        setSpeed(motorSpeedPercent - 10);
+      }
+    });
+
+    // --- MOTOR SPEED CONTROLLER ---
+    function setSpeed(pct) {
+      motorSpeedPercent = Math.max(15, Math.min(150, parseInt(pct, 10)));
+      
+      const slider = document.getElementById("speedSlider");
+      if (slider) slider.value = motorSpeedPercent;
+      
+      const valLabel = document.getElementById("speedValueLabel");
+      if (valLabel) valLabel.innerText = `${motorSpeedPercent}%`;
+      
+      const metricLabel = document.getElementById("speedMetricLabel");
+      if (metricLabel) {
+        let cmPerSec = 24.4 * (motorSpeedPercent / 100.0);
+        metricLabel.innerText = `(~${cmPerSec.toFixed(1)} cm/sec)`;
+      }
+
+      // Highlight active preset button if matched
+      document.querySelectorAll(".speed-preset-btn").forEach(btn => btn.classList.remove("ref-btn-accent"));
+      const activeBtn = document.getElementById(`btnSpeed${motorSpeedPercent}`);
+      if (activeBtn) activeBtn.classList.add("ref-btn-accent");
+
+      // Send SPEED command to hardware
+      sendRawCommand(`SPEED,${motorSpeedPercent}`);
+      logTerm(`[Speed] Commanded Motor Speed: ${motorSpeedPercent}% (~${(24.4 * motorSpeedPercent / 100).toFixed(1)} cm/s)`);
+    }
+
+    function onSpeedSliderChange(val) {
+      setSpeed(val);
+    }
+
+    window.addEventListener('keyup', (e) => {
+      const key = e.key;
+
+      if (key === 'ArrowRight' || key === 'd' || key === 'D') {
+        activeKeys.ArrowRight = false;
+        if (isHoldToDrive && drivingDirection === 'FWD' && !activeKeys.ArrowUp) {
+          stopDriving('FWD');
+        }
+      } else if (key === 'ArrowLeft' || key === 'a' || key === 'A') {
+        activeKeys.ArrowLeft = false;
+        if (isHoldToDrive && drivingDirection === 'REV' && !activeKeys.ArrowDown) {
+          stopDriving('REV');
+        }
+      } else if (key === 'ArrowUp' || key === 'w' || key === 'W') {
+        activeKeys.ArrowUp = false;
+        if (isHoldToDrive && drivingDirection === 'FWD' && !activeKeys.ArrowRight) {
+          stopDriving('FWD');
+        }
+      } else if (key === 'ArrowDown' || key === 's' || key === 'S') {
+        activeKeys.ArrowDown = false;
+        if (isHoldToDrive && drivingDirection === 'REV' && !activeKeys.ArrowLeft) {
+          stopDriving('REV');
+        }
+      }
+    });
+
+    // --- CAR DRIVING CONTROLS ---
+    function startDriving(direction) {
+      if (drivingDirection === direction) return; // Already driving in this direction
+      drivingDirection = direction;
+
+      updateUIOnDrive(direction);
+
+      if (direction === 'FWD') {
+        sendRawCommand("RIGHT");
+        logTerm("[Drive ►] Moving RIGHT (Continuous — you control stop)");
+      } else {
+        sendRawCommand("LEFT");
+        logTerm("[Drive ◄] Moving LEFT (Continuous — you control stop)");
+      }
+
+      startCarAnimation(direction);
+    }
+
+    function stopDriving(direction) {
+      if (drivingDirection !== direction) return;
+      drivingDirection = null;
+
+      sendRawCommand("STOP");
+      logTerm("[Stop] Motion STOPPED");
+
+      updateUIOnStop();
+      stopCarAnimation();
+    }
+
+    function emergencyBrake() {
+      drivingDirection = null;
+      activeKeys.ArrowRight = false;
+      activeKeys.ArrowLeft = false;
+      activeKeys.ArrowUp = false;
+      activeKeys.ArrowDown = false;
+
+      sendRawCommand("STOP");
+      logTerm("[HANDBRAKE] EMERGENCY BRAKE ENGAGED!");
+
+      updateUIOnBrake();
+      stopCarAnimation();
+    }
+
+    function driveToZero() {
+      drivingDirection = 'REV';
+      sendRawCommand("REV");
+      logTerm("[Dock] Returning to start dock...");
+      updateUIOnDrive('REV');
+      startCarAnimation('REV');
+    }
+
+    // --- 2D CAR ANIMATION LOOP ---
+    function startCarAnimation(dir) {
+      if (driveAnimationId) cancelAnimationFrame(driveAnimationId);
+
+      let lastTime = performance.now();
+      const speedPctPerSec = 18.2 * (motorSpeedPercent / 100.0); // Scaled by motor speed dial
+
+      function loop(now) {
+        let dt = (now - lastTime) / 1000.0;
+        lastTime = now;
+
+        if (drivingDirection === 'FWD') {
+          currentCarPct = Math.min(92.0, currentCarPct + speedPctPerSec * dt);
+        } else if (drivingDirection === 'REV') {
+          currentCarPct = Math.max(8.0, currentCarPct - speedPctPerSec * dt);
+        }
+
+        renderCarPosition();
+
+        if (drivingDirection !== null) {
+          driveAnimationId = requestAnimationFrame(loop);
+        }
+      }
+
+      driveAnimationId = requestAnimationFrame(loop);
+    }
+
+    function stopCarAnimation() {
+      if (driveAnimationId) {
+        cancelAnimationFrame(driveAnimationId);
+        driveAnimationId = null;
+      }
+    }
+
+    function renderCarPosition() {
+      const avatar = document.getElementById("carAvatar");
+      avatar.style.left = `${currentCarPct}%`;
+
+      const relLabel = document.getElementById("trackCarRelativeLabel");
+      if (currentCarPct <= 10) {
+        relLabel.innerText = "AT START DOCK [LEFT]";
+      } else if (currentCarPct >= 90) {
+        relLabel.innerText = "AT END RUNWAY [RIGHT]";
+      } else {
+        relLabel.innerText = "CRUISING ON TRACK";
+      }
+    }
+
+    // --- UI TELEMETRY UPDATES ---
+    function updateUIOnDrive(dir) {
+      const avatar = document.getElementById("carAvatar");
+      const badge = document.getElementById("carMotionStateBadge");
+      const throttleBar = document.getElementById("throttleBar");
+      const throttleLabel = document.getElementById("throttlePercentLabel");
+      const headerStatus = document.getElementById("headerSysStatus");
+
+      setGear(dir === 'FWD' ? 'D' : 'R');
+
+      if (dir === 'FWD') {
+        avatar.className = "car-avatar driving-forward";
+        badge.innerText = "DRIVE [FORWARD ►]";
+        badge.style.backgroundColor = "var(--mil-drive)";
+        throttleBar.style.width = "100%";
+        throttleLabel.innerText = "100% [FULL GAS]";
+        headerStatus.innerText = "SYS: FORWARD";
+        headerStatus.style.backgroundColor = "var(--mil-drive)";
+
+        document.getElementById("btnDpadRight").classList.add("active");
+        document.getElementById("btnDpadUp").classList.add("active");
+      } else {
+        avatar.className = "car-avatar driving-reverse";
+        badge.innerText = "REVERSE [BACKWARD ◄]";
+        badge.style.backgroundColor = "var(--mil-rev)";
+        throttleBar.style.width = "85%";
+        throttleLabel.innerText = "85% [REVERSE]";
+        headerStatus.innerText = "SYS: REVERSE";
+        headerStatus.style.backgroundColor = "var(--mil-rev)";
+
+        document.getElementById("btnDpadLeft").classList.add("active");
+        document.getElementById("btnDpadDown").classList.add("active");
+      }
+    }
+
+    function updateUIOnStop() {
+      const avatar = document.getElementById("carAvatar");
+      const badge = document.getElementById("carMotionStateBadge");
+      const throttleBar = document.getElementById("throttleBar");
+      const throttleLabel = document.getElementById("throttlePercentLabel");
+      const headerStatus = document.getElementById("headerSysStatus");
+
+      avatar.className = "car-avatar";
+      setGear('N');
+
+      badge.innerText = "NEUTRAL [STOPPED]";
+      badge.style.backgroundColor = "#242923";
+      throttleBar.style.width = "0%";
+      throttleLabel.innerText = "0% [IDLE]";
+      headerStatus.innerText = "SYS: READY";
+      headerStatus.style.backgroundColor = "#353c34";
+
+      clearDpadHighlights();
+    }
+
+    function updateUIOnBrake() {
+      const avatar = document.getElementById("carAvatar");
+      const badge = document.getElementById("carMotionStateBadge");
+      const throttleBar = document.getElementById("throttleBar");
+      const throttleLabel = document.getElementById("throttlePercentLabel");
+      const headerStatus = document.getElementById("headerSysStatus");
+
+      avatar.className = "car-avatar";
+      setGear('P');
+
+      badge.innerText = "PARKED [BRAKE ON]";
+      badge.style.backgroundColor = "var(--mil-miss)";
+      throttleBar.style.width = "0%";
+      throttleLabel.innerText = "0% [BRAKE]";
+      headerStatus.innerText = "SYS: BRAKED";
+      headerStatus.style.backgroundColor = "var(--mil-miss)";
+
+      clearDpadHighlights();
+      document.getElementById("btnDpadStop").classList.add("active");
+      setTimeout(() => document.getElementById("btnDpadStop").classList.remove("active"), 200);
+    }
+
+    function setGear(gear) {
+      document.querySelectorAll(".gear-item").forEach(el => el.classList.remove("active-gear"));
+      const target = document.getElementById(`gear${gear}`);
+      if (target) target.classList.add("active-gear");
+    }
+
+    function clearDpadHighlights() {
+      document.getElementById("btnDpadRight").classList.remove("active");
+      document.getElementById("btnDpadLeft").classList.remove("active");
+      document.getElementById("btnDpadUp").classList.remove("active");
+      document.getElementById("btnDpadDown").classList.remove("active");
+    }
+
+    function toggleDriveMode() {
+      isHoldToDrive = !isHoldToDrive;
+      const btn = document.getElementById("btnDriveModeToggle");
+      const notice = document.getElementById("subbarNotice");
+
+      if (isHoldToDrive) {
+        btn.innerText = "HOLD TO DRIVE";
+        btn.style.backgroundColor = "#2b3329";
+        notice.innerText = "HOLD ARROW KEYS TO DRIVE JUST LIKE A CAR // RELEASE KEY TO STOP";
+        logTerm("[Mode] Switched to Gas Pedal mode (Hold key to drive, release to stop).");
+      } else {
+        btn.innerText = "CRUISE MODE";
+        btn.style.backgroundColor = "var(--mil-drive)";
+        notice.innerText = "CRUISE MODE: PRESS ARROW TO CRUISE // PRESS SPACE TO STOP";
+        logTerm("[Mode] Switched to Cruise mode (Press arrow to cruise, press Space to brake).");
+      }
+    }
+
+    // --- POP TARGET & PHYSICAL SERVO ENGINE (COM7 / pop.ino) ---
+    const targetServoStates = { 1: false, 2: false, 3: false, 4: false, 5: false, 6: false, 7: false };
+
+    function checkSerialConnected(showAlert = false) {
+      if (!isConnected || !port || !port.writable) {
+        logTerm("[Warning] Serial COM7 not connected. (Click 'CONNECT ESP32' at top right to connect servo pop controller).");
+        if (showAlert) {
+          alert("ESP32 Serial is not connected!\n\nPlease click the green 'CONNECT ESP32' button at the top right of the dashboard and select COM7 (Silicon Labs CP210x).");
+        }
+        return false;
+      }
+      return true;
+    }
+
+    function toggleSingleServo(id) {
+      if (targetServoStates[id]) {
+        lowerTarget(id);
+      } else {
+        raiseTarget(id);
+      }
+    }
+
+    function raiseTarget(id) {
+      targetServoStates[id] = true;
+      elevationState = 'UP';
+      sendRawCommand(`UP,${id}`);
+      logTerm(`[Servo Pop] Raising Target ${id} (UP,${id})...`);
+      updateServoButtonUI(id, true);
+      const targetFace = document.getElementById("targetFace");
+      if (targetFace) {
+        targetFace.style.transform = "none";
+        targetFace.style.opacity = "1.0";
+      }
+      const badge = document.getElementById("targetElevationBadge");
+      if (badge) {
+        badge.innerText = "EXPOSED";
+        badge.style.backgroundColor = "var(--mil-hit)";
+      }
+      const timerLabel = document.getElementById("exposureTimerLabel");
+      if (timerLabel) timerLabel.innerText = "EXPOSED [ARMED]";
+      const pBar = document.getElementById("exposureProgressBar");
+      if (pBar) pBar.style.width = "100%";
+      setTimeout(() => calibrateEmptyTargetBaseline(), 700);
+    }
+
+    function lowerTarget(id) {
+      targetServoStates[id] = false;
+      elevationState = 'DOWN';
+      sendRawCommand(`DOWN,${id}`);
+      logTerm(`[Servo Pop] Lowering Target ${id} (DOWN,${id})...`);
+      updateServoButtonUI(id, false);
+      const targetFace = document.getElementById("targetFace");
+      if (targetFace) {
+        targetFace.style.transform = "rotateX(60deg) scale(0.92) translateY(24px)";
+        targetFace.style.opacity = "0.35";
+      }
+      const badge = document.getElementById("targetElevationBadge");
+      if (badge) {
+        badge.innerText = "CONCEALED";
+        badge.style.backgroundColor = "var(--mil-dark)";
+      }
+      const timerLabel = document.getElementById("exposureTimerLabel");
+      if (timerLabel) timerLabel.innerText = "CONCEALED";
+      const pBar = document.getElementById("exposureProgressBar");
+      if (pBar) pBar.style.width = "0%";
+    }
+
+    function sendPopServo(action) {
+      if (action === 'ALL_DOWN') {
+        for (let k in targetServoStates) targetServoStates[k] = false;
+        elevationState = 'DOWN';
+        if (exposureTimer) {
+          clearInterval(exposureTimer);
+          exposureTimer = null;
+        }
+        sendRawCommand("DOWN,ALL");
+        logTerm("[Servo Pop] Dropping all targets (DOWN,ALL)...");
+        updateAllServoButtonsUI(false);
+        const targetFace = document.getElementById("targetFace");
+        if (targetFace) {
+          targetFace.style.transform = "rotateX(60deg) scale(0.92) translateY(24px)";
+          targetFace.style.opacity = "0.35";
+        }
+        const badge = document.getElementById("targetElevationBadge");
+        if (badge) {
+          badge.innerText = "CONCEALED";
+          badge.style.backgroundColor = "var(--mil-dark)";
+        }
+        const timerLabel = document.getElementById("exposureTimerLabel");
+        if (timerLabel) timerLabel.innerText = "CONCEALED";
+        const pBar = document.getElementById("exposureProgressBar");
+        if (pBar) pBar.style.width = "0%";
+      } else {
+        raiseTarget(action);
+      }
+    }
+
+    function handlePopCommand(targetId = 1, duration = 5.0) {
+      exposureSeconds = duration;
+      elevationState = 'UP';
+      targetServoStates[targetId] = true;
+
+      // Record exact pop-up timestamp so we ignore mechanical wobble during first 1.2s
+      window.lastPopUpTimeMs = Date.now();
+      stuckBulletAcknowledged = false;
+
+      const resBadge = document.getElementById("shotResultBadge");
+      if (resBadge) {
+        resBadge.innerText = `🎯 TARGET UP (ARMED) — FIRE NOW! (${duration.toFixed(1)}s)`;
+        resBadge.style.color = "#ffcc00";
+        resBadge.style.borderColor = "#ffcc00";
+      }
+      const banner = document.getElementById("nerfOptimalHudBanner");
+      if (banner) banner.style.display = "none";
+
+      // Send physical serial/WiFi command to raise target!
+      sendRawCommand(`UP,${targetId}`);
+      logTerm(`[Pop Cycle] Target ${targetId} POPPED UP for ${duration.toFixed(1)}s (UP,${targetId})`);
+
+      const badge = document.getElementById("targetElevationBadge");
+      if (badge) {
+        badge.innerText = `EXPOSED [${duration.toFixed(1)}s]`;
+        badge.style.backgroundColor = "var(--mil-hit)";
+      }
+      
+      const targetFace = document.getElementById("targetFace");
+      if (targetFace) {
+        targetFace.style.transform = "none";
+        targetFace.style.opacity = "1.0";
+      }
+
+      updateServoButtonUI(targetId, true);
+
+      setTimeout(() => calibrateEmptyTargetBaseline(), 700);
+
+      if (exposureTimer) clearInterval(exposureTimer);
+      exposureTimer = setInterval(() => {
+        exposureSeconds -= 0.1;
+        if (exposureSeconds <= 0) {
+          clearInterval(exposureTimer);
+          exposureTimer = null;
+          foldTarget(targetId);
+          if (!stuckBulletAcknowledged) {
+            const rb = document.getElementById("shotResultBadge");
+            if (rb) {
+              rb.innerText = "❌ MISS — NO BULLET DETECTED (TARGET DROPPED)";
+              rb.style.color = "#ff453a";
+              rb.style.borderColor = "#ff453a";
+            }
+            const bnr = document.getElementById("nerfOptimalHudBanner");
+            if (bnr) {
+              bnr.style.display = "block";
+              bnr.innerText = "❌ MISS! 5.0s EXPIRED // NO BULLET HIT";
+              bnr.style.borderColor = "#ff453a";
+              bnr.style.color = "#ff453a";
+              bnr.style.boxShadow = "0 0 20px rgba(255, 69, 58, 0.7)";
+            }
+            logTerm(`[🎯 SHOT RESULT] ❌ MISS — 5.0s elapsed with no bullet hit. Target dropped.`);
+          }
+        } else {
+          const tLabel = document.getElementById("exposureTimerLabel");
+          if (tLabel) tLabel.innerText = `${exposureSeconds.toFixed(1)}s REMAINING`;
+          const pBar = document.getElementById("exposureProgressBar");
+          if (pBar) pBar.style.width = `${(exposureSeconds / duration) * 100}%`;
+        }
+      }, 100);
+    }
+
+    function foldTarget(targetId = 1) {
+      elevationState = 'DOWN';
+      targetServoStates[targetId] = false;
+
+      if (exposureTimer) {
+        clearInterval(exposureTimer);
+        exposureTimer = null;
+      }
+
+      // Send physical serial command to lower target!
+      sendRawCommand(`DOWN,${targetId}`);
+      logTerm(`[Pop Cycle] Target ${targetId} CONCEALED (DOWN,${targetId})`);
+
+      const badge = document.getElementById("targetElevationBadge");
+      if (badge) {
+        badge.innerText = "CONCEALED";
+        badge.style.backgroundColor = "var(--mil-dark)";
+      }
+      const timerLabel = document.getElementById("exposureTimerLabel");
+      if (timerLabel) timerLabel.innerText = "CONCEALED";
+      const pBar = document.getElementById("exposureProgressBar");
+      if (pBar) pBar.style.width = "0%";
+      
+      const targetFace = document.getElementById("targetFace");
+      if (targetFace) {
+        targetFace.style.transform = "rotateX(60deg) scale(0.92) translateY(24px)";
+        targetFace.style.opacity = "0.35";
+      }
+
+      updateServoButtonUI(targetId, false);
+    }
+
+    function updateServoButtonUI(id, isUp) {
+      const btn = document.getElementById(`btnServo${id}`);
+      if (btn) {
+        if (isUp) {
+          btn.classList.add("ref-btn-accent");
+          btn.innerText = `T${id} [UP]`;
+        } else {
+          btn.classList.remove("ref-btn-accent");
+          btn.innerText = `T${id} [DOWN]`;
+        }
+      }
+      const posLabel = document.getElementById("servoActivePosLabel");
+      if (posLabel) {
+        posLabel.innerText = `Target ${id}: ${isUp ? 'UP (Exposed)' : 'DOWN (Concealed)'}`;
+      }
+    }
+
+    function updateAllServoButtonsUI(isUp) {
+      [1, 2, 3].forEach(id => updateServoButtonUI(id, isUp));
+    }
+
+    function handleTargetClick(e) {
+      if (elevationState === 'DOWN') return;
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      const scale = 150.0 / rect.width;
+      const xMm = clickX * scale;
+      const yMm = clickY * scale;
+
+      const isHit = (xMm >= 50 && xMm <= 100 && yMm >= 50 && yMm <= 100);
+
+      const dot = document.createElement("div");
+      dot.style.position = "absolute";
+      dot.style.left = `${(xMm / 150) * 100}%`;
+      dot.style.top = `${(yMm / 150) * 100}%`;
+      dot.style.width = "9px";
+      dot.style.height = "9px";
+      dot.style.transform = "translate(-50%, -50%)";
+      dot.style.borderRadius = "50%";
+      dot.style.backgroundColor = isHit ? "var(--mil-hit)" : "var(--mil-miss)";
+      dot.style.border = "1.5px solid #ffffff";
+      dot.style.boxShadow = "0 0 8px rgba(0,0,0,0.5)";
+      dot.style.pointerEvents = "none";
+      document.getElementById("impactDotsContainer").appendChild(dot);
+
+      logTerm(`[Target Impact] ${isHit ? 'HIT (ZONE 4)' : 'MISS'} at (${xMm.toFixed(1)}mm, ${yMm.toFixed(1)}mm)`);
+    }
+
+    // --- RESET SHOT MARKINGS & RE-CALIBRATE BASELINE ---
+    function resetShots() {
+      if (autoDropAfterShotTimer) {
+        clearTimeout(autoDropAfterShotTimer);
+        autoDropAfterShotTimer = null;
+      }
+      const simDots = document.getElementById("impactDotsContainer");
+      if (simDots) simDots.innerHTML = "";
+      const camDots = document.getElementById("camImpactDotsContainer");
+      if (camDots) camDots.innerHTML = "";
+      const banner = document.getElementById("nerfOptimalHudBanner");
+      if (banner) banner.style.display = "none";
+      
+      stuckBulletAcknowledged = false;
+      lastDetectedBulletPos = null;
+      nerfTrackHistory = [];
+      calibrateEmptyTargetBaseline();
+      logTerm("[Target] Shot markings cleared. Re-calibrating empty target baseline.");
+    }
+
+    // =========================================================================
+    // OPTICAL CAMERA STREAMING & VISION INTEGRATION (USB UVC & WiFi MJPEG)
+    // =========================================================================
+    let activeTargetView = 'camera'; // 'camera' or 'sim'
+    let webcamStream = null;
+    let isCameraRunning = false;
+
+    // Switch between Camera Stream and Simulated Target Canvas
+    function switchTargetView(mode) {
+      activeTargetView = mode;
+      const camContainer = document.getElementById("cameraViewportContainer");
+      const simContainer = document.getElementById("simTargetContainer");
+      const tabCam = document.getElementById("tabModeCamera");
+      const tabSim = document.getElementById("tabModeSim");
+
+      if (mode === 'camera') {
+        camContainer.style.display = "block";
+        simContainer.style.display = "none";
+        tabCam.classList.add("ref-btn-accent");
+        tabSim.classList.remove("ref-btn-accent");
+        tabSim.style.backgroundColor = "#2b3329";
+        logTerm("[View] Switched to OPTICAL CAM [LIVE]");
+      } else {
+        camContainer.style.display = "none";
+        simContainer.style.display = "block";
+        tabSim.classList.add("ref-btn-accent");
+        tabCam.classList.remove("ref-btn-accent");
+        tabCam.style.backgroundColor = "#2b3329";
+        logTerm("[View] Switched to TARGET CANVAS (SIMULATION)");
+      }
+    }
+
+    // --- ESP32-P4 HIGH-SPEED USB SERIAL CAMERA RECEIVER (COM17 @ 3,000,000 BAUD) ---
+    let cameraPort = null;
+    let cameraReader = null;
+    let isCameraSerialConnected = false;
+    let cameraFrameCount = 0;
+    let lastCameraFpsTime = performance.now();
+    let currentCameraFps = 0.0;
+    let lastBlobUrl = null;
+    let lastLaserHitTime = 0;
+
+    async function toggleConnectCameraSerial() {
+      if (isCameraSerialConnected) {
+        await disconnectCameraSerial();
+      } else {
+        await connectCameraSerial();
+      }
+    }
+
+    async function connectCameraSerial() {
+      if (!("serial" in navigator)) {
+        alert("Web Serial API is not supported in this browser. Please use Google Chrome or Microsoft Edge.");
+        return;
+      }
+
+      try {
+        logTerm("[Camera Serial] Requesting ESP32-P4 Port (Please select 'USB-Enhanced-SERIAL CH343' / COM17)...");
+        cameraPort = await navigator.serial.requestPort();
+        await cameraPort.open({ baudRate: 3000000, bufferSize: 131072 });
+
+        isCameraSerialConnected = true;
+        updateCameraSerialUI(true);
+        logTerm("[Camera Serial] Connected to ESP32-P4 at 3,000,000 baud! Streaming live video frames...");
+
+        const video = document.getElementById("webcamVideo");
+        const img = document.getElementById("espCameraImg");
+        const offlineNotice = document.getElementById("cameraOfflineNotice");
+        if (video) video.style.display = "none";
+        if (offlineNotice) offlineNotice.style.display = "none";
+        if (img) img.style.display = "block";
+
+        const sel = document.getElementById("cameraSourceSelect");
+        if (sel) sel.value = "serial";
+
+        readCameraSerialLoop();
+      } catch (err) {
+        logTerm(`[Camera Serial Error] ${err.message}`);
+        updateCameraSerialUI(false);
+      }
+    }
+
+    async function disconnectCameraSerial() {
+      isCameraSerialConnected = false;
+      try {
+        if (cameraReader) {
+          await cameraReader.cancel();
+          cameraReader.releaseLock();
+          cameraReader = null;
+        }
+        if (cameraPort) {
+          await cameraPort.close();
+          cameraPort = null;
+        }
+      } catch (e) {}
+      updateCameraSerialUI(false);
+      logTerm("[Camera Serial] Disconnected from COM17.");
+    }
+
+    function updateCameraSerialUI(connected) {
+      const dot = document.getElementById("camStatusDot");
+      const badge = document.getElementById("camStatusBadge");
+      const btn = document.getElementById("btnConnectCamSerial");
+
+      if (connected) {
+        if (dot) dot.style.backgroundColor = "#2cff55";
+        if (badge) {
+          badge.innerText = "COM17 LIVE [3M BAUD]";
+          badge.style.color = "var(--mil-hit)";
+        }
+        if (btn) {
+          btn.innerText = "🔌 DISCONNECT COM17";
+          btn.style.backgroundColor = "#5c1818";
+        }
+      } else {
+        if (dot) dot.style.backgroundColor = "#ffcc00";
+        if (badge) {
+          badge.innerText = "STREAM OFFLINE";
+          badge.style.color = "#ffcc00";
+        }
+        if (btn) {
+          btn.innerText = "🔌 CONNECT COM17";
+          btn.style.backgroundColor = "#1a4d2e";
+        }
+      }
+    }
+
+    async function readCameraSerialLoop() {
+      let chunks = [];
+      let totalChunkLen = 0;
+
+      while (isCameraSerialConnected && cameraPort && cameraPort.readable) {
+        try {
+          cameraReader = cameraPort.readable.getReader();
+          while (true) {
+            const { value, done } = await cameraReader.read();
+            if (done) break;
+            if (value && value.length > 0) {
+              chunks.push(value);
+              totalChunkLen += value.length;
+
+              if (totalChunkLen > 350000) {
+                chunks = [chunks[chunks.length - 1]];
+                totalChunkLen = chunks[0].length;
+              }
+
+              if (totalChunkLen >= 15) {
+                let flatBuffer = new Uint8Array(totalChunkLen);
+                let offset = 0;
+                for (let c of chunks) {
+                  flatBuffer.set(c, offset);
+                  offset += c.length;
+                }
+
+                let consumed = 0;
+                while (flatBuffer.length - consumed >= 15) {
+                  if (flatBuffer[consumed] === 0xAA && flatBuffer[consumed + 1] === 0x55 && flatBuffer[consumed + 2] === 0x01) {
+                    const view = new DataView(flatBuffer.buffer, flatBuffer.byteOffset + consumed, 15);
+                    const frameId = view.getUint32(3, true);
+                    const payloadLen = view.getUint32(7, true);
+
+                    if (payloadLen > 250000 || payloadLen === 0) {
+                      consumed += 1;
+                      continue;
+                    }
+
+                    const packetTotal = 15 + payloadLen;
+                    if (flatBuffer.length - consumed < packetTotal) {
+                      break; // Wait for full frame
+                    }
+
+                    const payload = flatBuffer.slice(consumed + 15, consumed + packetTotal);
+                    consumed += packetTotal;
+                    renderCameraBinaryFrame(payload, frameId);
+                  } else {
+                    consumed += 1;
+                  }
+                }
+
+                if (consumed > 0) {
+                  const remaining = flatBuffer.slice(consumed);
+                  chunks = remaining.length > 0 ? [remaining] : [];
+                  totalChunkLen = remaining.length;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          if (isCameraSerialConnected) {
+            logTerm(`[Camera Serial Stream] ${e.message}`);
+          }
+          break;
+        } finally {
+          if (cameraReader) {
+            try { cameraReader.releaseLock(); } catch(e) {}
+            cameraReader = null;
+          }
+        }
+      }
+    }
+
+    function renderCameraBinaryFrame(payload, frameId) {
+      if (!payload || payload.length === 0) return;
+
+      let eoi = -1;
+      for (let i = payload.length - 2; i >= 0; i--) {
+        if (payload[i] === 0xFF && payload[i+1] === 0xD9) {
+          eoi = i + 2;
+          break;
+        }
+      }
+
+      const jpegBytes = (eoi !== -1) ? payload.slice(0, eoi) : payload;
+      const blob = new Blob([jpegBytes], { type: "image/jpeg" });
+      const newUrl = URL.createObjectURL(blob);
+
+      const img = document.getElementById("espCameraImg");
+      if (img) {
+        img.src = newUrl;
+        if (lastBlobUrl) {
+          URL.revokeObjectURL(lastBlobUrl);
+        }
+        lastBlobUrl = newUrl;
+        if (!img.onload) {
+          img.onload = () => onCameraStreamLoad();
+        }
+      }
+
+      // Check for ESP32-P4 steganographic metadata (32 bytes at end: 0xDE 0xAD 0xBE 0xEF)
+      // NOTE: Stego auto-trigger is disabled because COM17 legacy firmware emits hitFound=1 on every frame!
+      if (payload.length >= 32) {
+        const metaOffset = payload.length - 32;
+        if (payload[metaOffset] === 0xDE && payload[metaOffset+1] === 0xAD && payload[metaOffset+2] === 0xBE && payload[metaOffset+3] === 0xEF) {
+          // Packet metadata parsed for telemetry only; do NOT auto-trigger to avoid false hits
+        }
+      }
+
+      cameraFrameCount++;
+      const now = performance.now();
+      if (now - lastCameraFpsTime >= 1000) {
+        currentCameraFps = (cameraFrameCount * 1000) / (now - lastCameraFpsTime);
+        cameraFrameCount = 0;
+        lastCameraFpsTime = now;
+        const badge = document.getElementById("camStatusBadge");
+        if (badge) {
+          badge.innerText = `COM17 [${currentCameraFps.toFixed(0)} FPS]`;
+        }
+      }
+    }
+
+    // --- ADVANCED DIFFERENTIAL VISION DETECTOR (ZERO FALSE POSITIVES) ---
+    let nerfAnalysisCanvas = null;
+    let nerfAnalysisCtx = null;
+    let targetBaseline = null;          // Clean baseline of the empty target
+    let baselineAccumulator = null;     // Multi-frame accumulator for crisp baseline
+    let baselineSampleCount = 0;
+    let baselineWarmupFrames = 0;       // Settles sensor auto-exposure and gain
+    let isCalibratingBaseline = true;   // Auto-calibrates clean target on startup
+    let nerfTrackHistory = [];
+    let lastNerfScanTime = 0;
+    let lastNerfAlertTime = 0;
+    let stuckBulletAcknowledged = false; // Prevents duplicate triggers for same bullet
+    let lastDetectedBulletPos = null;
+    let autoDropAfterShotTimer = null;   // 3.0-second timer to auto-clear and lower target
+
+    // Trigger explicit baseline capture of the clean target
+    function calibrateEmptyTargetBaseline() {
+      targetBaseline = null;
+      baselineAccumulator = null;
+      baselineSampleCount = 0;
+      baselineWarmupFrames = 0;
+      isCalibratingBaseline = true;
+      stuckBulletAcknowledged = false;
+      lastDetectedBulletPos = null;
+      nerfTrackHistory = [];
+      const badge = document.getElementById("baselineStatusBadge");
+      if (badge) {
+        badge.innerText = "[CALIBRATING...]";
+        badge.style.color = "#ffcc00";
+      }
+      logTerm("[Target CV] Calibrating empty target baseline... Please keep target clean and stationary.");
+    }
+
+    function processNerfBulletDetection(sourceEl) {
+      if (!sourceEl) return;
+      const isVideo = (sourceEl.tagName === 'VIDEO');
+      if (isVideo) {
+        if (sourceEl.readyState < 2 || sourceEl.videoWidth === 0) return;
+      } else {
+        if (!sourceEl.complete || sourceEl.naturalWidth === 0) return;
+      }
+      if (stuckBulletAcknowledged) return; // Shot already locked and awaiting auto-drop
+
+      const now = performance.now();
+      if (now - lastNerfScanTime < 65) return; // ~15 FPS
+      lastNerfScanTime = now;
+
+      if (!nerfAnalysisCanvas) {
+        nerfAnalysisCanvas = document.createElement("canvas");
+        nerfAnalysisCanvas.width = 160;
+        nerfAnalysisCanvas.height = 160;
+        nerfAnalysisCtx = nerfAnalysisCanvas.getContext("2d", { willReadFrequently: true });
+      }
+
+      try {
+        nerfAnalysisCtx.drawImage(sourceEl, 0, 0, 160, 160);
+        const imgData = nerfAnalysisCtx.getImageData(0, 0, 160, 160);
+        const data = imgData.data;
+
+        // Auto-baseline learning phase (skips first 6 frames to settle exposure, then averages 8 frames)
+        if (isCalibratingBaseline || !targetBaseline) {
+          baselineWarmupFrames++;
+          if (baselineWarmupFrames < 6) {
+            return;
+          }
+
+          if (!baselineAccumulator) {
+            baselineAccumulator = new Float32Array(data.length);
+            baselineSampleCount = 0;
+          }
+          for (let i = 0; i < data.length; i++) {
+            baselineAccumulator[i] += data[i];
+          }
+          baselineSampleCount++;
+
+          const telem = document.getElementById("hudCvTelemetry");
+          if (telem) {
+            telem.textContent = `CV: LEARNING BASELINE [${baselineSampleCount}/8]`;
+            telem.setAttribute("fill", "#ffcc00");
+          }
+
+          if (baselineSampleCount >= 8) {
+            targetBaseline = new Uint8ClampedArray(data.length);
+            for (let i = 0; i < data.length; i++) {
+              targetBaseline[i] = Math.round(baselineAccumulator[i] / baselineSampleCount);
+            }
+            isCalibratingBaseline = false;
+            baselineAccumulator = null;
+            baselineWarmupFrames = 0;
+            const badge = document.getElementById("baselineStatusBadge");
+            if (badge) {
+              badge.innerText = "[ARMED]";
+              badge.style.color = "#2cff55";
+            }
+            if (telem) {
+              telem.textContent = "CV: ARMED // OPTIMAL ZONE READY";
+              telem.setAttribute("fill", "#2cff55");
+            }
+            logTerm("[Target CV] Baseline calibrated! Optimal zone armed for yellow Nerf bullet impact.");
+          }
+          return;
+        }
+
+        // --- SCAN ENTIRE BLACK REGION AS OPTIMAL ZONE (Center 80, 80, Radius 55) ---
+        const cx0 = 80, cy0 = 80;
+        const scanRadius = 55; // Covers entire black silhouette
+        let sumX = 0, sumY = 0, changedDartCount = 0, rawDartCount = 0;
+        let minX = 999, maxX = -1, minY = 999, maxY = -1;
+
+        for (let y = cy0 - scanRadius; y <= cy0 + scanRadius; y++) {
+          const dy = y - cy0;
+          const rowOffset = y * 160 * 4;
+          for (let x = cx0 - scanRadius; x <= cx0 + scanRadius; x++) {
+            const dx = x - cx0;
+            const distFromCenter = Math.hypot(dx, dy);
+            if (distFromCenter > scanRadius) continue;
+
+            const idx = rowOffset + x * 4;
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+
+            // Nerf Dart Chromatic Signature (Yellow foam body + Orange suction tip)
+            const isNerfDart = (
+              r >= 120 &&
+              b <= 75 &&
+              (r - b) >= 60 &&
+              g >= 40 &&
+              (g - b) >= 15 &&
+              r >= (g - 25)
+            );
+
+            if (isNerfDart) {
+              rawDartCount++;
+            }
+
+            const baseR = targetBaseline[idx];
+            const baseG = targetBaseline[idx + 1];
+            const baseB = targetBaseline[idx + 2];
+
+            // Delta from clean target baseline
+            const delta = (Math.abs(r - baseR) + Math.abs(g - baseG) + Math.abs(b - baseB)) / 3;
+
+            // Inspect pixels that physically changed from clean baseline AND match dart color
+            if (delta >= 16 && isNerfDart) {
+              sumX += x;
+              sumY += y;
+              changedDartCount++;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+
+        // Live Telemetry Readout on Reticle
+        const telem = document.getElementById("hudCvTelemetry");
+        if (telem) {
+          if (changedDartCount > 0) {
+            telem.textContent = `CV: TARGETING // DART: ${changedDartCount} PX`;
+            telem.setAttribute("fill", "#ffcc00");
+          } else {
+            telem.textContent = `CV: ARMED // DART: 0 PX`;
+            telem.setAttribute("fill", "#2cff55");
+          }
+        }
+
+        // Bullet Detection Trigger:
+        // Real Nerf dart spans 25 to 6000 changed pixels (user's stuck bullet had ~900-1200 px!)
+        // Fallback: If baseline had an issue, rawDartCount >= 180 also triggers!
+        const isBulletHit = (changedDartCount >= 25 && changedDartCount <= 6000) || (rawDartCount >= 180);
+
+        if (isBulletHit) {
+          const effectiveCount = (changedDartCount >= 25) ? changedDartCount : rawDartCount;
+          const cx = (changedDartCount >= 25) ? (sumX / changedDartCount) : cx0;
+          const cy = (changedDartCount >= 25) ? (sumY / changedDartCount) : cy0;
+
+          nerfTrackHistory.push({ x: cx, y: cy, time: Date.now() });
+          if (nerfTrackHistory.length > 3) nerfTrackHistory.shift();
+
+          // Rapid confirmation: STUCK if cluster position stays steady across >= 2 frames (~100ms)
+          if (nerfTrackHistory.length >= 2) {
+            let isStuck = true;
+            for (let i = 1; i < nerfTrackHistory.length; i++) {
+              const d = Math.hypot(nerfTrackHistory[i].x - nerfTrackHistory[0].x, nerfTrackHistory[i].y - nerfTrackHistory[0].y);
+              if (d > 12.0) {
+                isStuck = false;
+                break;
+              }
+            }
+
+            if (isStuck && !stuckBulletAcknowledged) {
+              const distFromCenter = Math.hypot(cx - cx0, cy - cy0);
+              lastDetectedBulletPos = { x: cx, y: cy };
+              handleNerfBulletStuck(cx, cy, distFromCenter, true, `NERF DART (${effectiveCount} PX)`);
+            }
+          }
+        } else {
+          // Dynamic ambient lighting adaptation when target is empty (cluster < 5)
+          if (changedDartCount < 5 && targetBaseline) {
+            for (let y = cy0 - scanRadius; y <= cy0 + scanRadius; y++) {
+              const rowOffset = y * 160 * 4;
+              for (let x = cx0 - scanRadius; x <= cx0 + scanRadius; x++) {
+                const idx = rowOffset + x * 4;
+                targetBaseline[idx] = Math.round(targetBaseline[idx] * 0.98 + data[idx] * 0.02);
+                targetBaseline[idx + 1] = Math.round(targetBaseline[idx + 1] * 0.98 + data[idx + 1] * 0.02);
+                targetBaseline[idx + 2] = Math.round(targetBaseline[idx + 2] * 0.98 + data[idx + 2] * 0.02);
+              }
+            }
+          }
+          if (nerfTrackHistory.length > 0) {
+            nerfTrackHistory.shift();
+          }
+        }
+      } catch (err) {
+        // Canvas security/frame error safeguard
+      }
+    }
+
+    // Unified continuous CV loop that monitors active stream (USB UVC webcam, COM17 serial, or WiFi MJPEG)
+    let cvLoopRunning = false;
+    function startCvDetectionLoop() {
+      // Dedicated Python Backend Service (http://localhost:8001) handles 100% of COM17 video analysis & hit detection.
+      cvLoopRunning = true;
+    }
+
+    function handleNerfBulletStuck(cx, cy, distFromCenter, isOptimal, source) {
+      if (stuckBulletAcknowledged) return;
+      stuckBulletAcknowledged = true;
+
+      // 1. IMMEDIATELY DROP THE PHYSICAL TARGET!
+      // Commands servo DOWN,1 over COM7 instantly without delay
+      foldTarget(1);
+      logTerm(`[🎯 NERF HIT (${source})] Yellow bullet detected in OPTIMAL BLACK REGION! Target DROPPED IMMEDIATELY (DOWN,1)...`);
+
+      // 2. Animate Green Optimal Circle
+      const optCircle = document.getElementById("optimalZoneCircle");
+      if (optCircle) {
+        optCircle.classList.remove("optimal-hit-active");
+        void optCircle.offsetWidth; // Force CSS reflow
+        optCircle.classList.add("optimal-hit-active");
+      }
+
+      // 3. Show HUD banner
+      const banner = document.getElementById("nerfOptimalHudBanner");
+      if (banner) {
+        banner.style.display = "block";
+        banner.innerText = "🎯 OPTIMAL HIT! YELLOW BULLET DETECTED // TARGET DROPPED IMMEDIATELY";
+        banner.style.borderColor = "#2cff55";
+        banner.style.color = "#2cff55";
+        banner.style.boxShadow = "0 0 25px rgba(44, 255, 85, 0.9)";
+      }
+
+      // 4. Add visual impact dot on camera viewport (EXACTLY ONE DOT)
+      const container = document.getElementById("camImpactDotsContainer");
+      if (container) {
+        container.innerHTML = "";
+        const dot = document.createElement("div");
+        dot.style.position = "absolute";
+        dot.style.left = `${(cx / 160) * 100}%`;
+        dot.style.top = `${(cy / 160) * 100}%`;
+        dot.style.width = "14px";
+        dot.style.height = "14px";
+        dot.style.transform = "translate(-50%, -50%)";
+        dot.style.borderRadius = "50%";
+        dot.style.backgroundColor = "#2cff55";
+        dot.style.border = "2px solid #ffffff";
+        dot.style.boxShadow = "0 0 14px #2cff55";
+        dot.style.zIndex = "45";
+        container.appendChild(dot);
+      }
+
+      // 5. Play confirmation tone
+      playOptimalHitChirp(true);
+
+      // 6. Clear any running exposure timer countdown
+      if (exposureTimer) {
+        clearInterval(exposureTimer);
+        exposureTimer = null;
+      }
+
+      const timerLabel = document.getElementById("exposureTimerLabel");
+      if (timerLabel) {
+        timerLabel.innerText = "CONCEALED [HIT DROPPED]";
+      }
+
+      // 7. Auto-clear shot markings after 3.0s so UI is clean for next pop
+      if (autoDropAfterShotTimer) {
+        clearTimeout(autoDropAfterShotTimer);
+      }
+
+      autoDropAfterShotTimer = setTimeout(() => {
+        logTerm("[Auto-Cycle] Shot markings cleared. Target ready for next pop.");
+        resetShots();
+        autoDropAfterShotTimer = null;
+      }, 3000);
+    }
+
+    function playOptimalHitChirp(isOptimal) {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(isOptimal ? 880 : 587.33, audioCtx.currentTime);
+        if (isOptimal) {
+          osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.16);
+        }
+        gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.28);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.28);
+      } catch(e) {}
+    }
+
+    // Video stream is strictly through COM port (COM17 via Python Backend @ :8001 or Direct WebSerial)
+    async function refreshCameraDevices() {
+      const select = document.getElementById("cameraSourceSelect");
+      if (select) {
+        select.innerHTML = '<option value="serial">🔌 ESP32-P4 USB Serial (COM17)</option>';
+        select.value = "serial";
+      }
+
+      // Connect image viewport to Python CV Backend video feed
+      const img = document.getElementById("espCameraImg");
+      const offlineNotice = document.getElementById("cameraOfflineNotice");
+      if (img) {
+        img.src = "http://localhost:8001/video_feed";
+        img.style.display = "block";
+        img.onerror = () => {
+          // If Python backend is not running, show prompt
+          if (offlineNotice) offlineNotice.style.display = "flex";
+        };
+        img.onload = () => {
+          if (offlineNotice) offlineNotice.style.display = "none";
+        };
+      }
+      logTerm("[Camera Stream] Configured strictly for COM17 via Python CV Backend (http://localhost:8001/video_feed).");
+    }
+
+    function onCameraSourceChange(val) {
+      const wifiRow = document.getElementById("wifiStreamRow");
+      if (val === 'serial') {
+        if (wifiRow) wifiRow.style.display = "none";
+        connectCameraSerial();
+      } else if (val === 'wifi') {
+        if (wifiRow) wifiRow.style.display = "flex";
+        disconnectCameraSerial();
+        reloadCameraStream();
+      } else {
+        if (wifiRow) wifiRow.style.display = "none";
+        disconnectCameraSerial();
+        startSelectedCamera();
+      }
+    }
+
+    async function startSelectedCamera() {
+      const select = document.getElementById("cameraSourceSelect");
+      const val = select ? select.value : 'wifi';
+      const img = document.getElementById("espCameraImg");
+      const video = document.getElementById("webcamVideo");
+      const offlineNotice = document.getElementById("cameraOfflineNotice");
+      const dot = document.getElementById("camStatusDot");
+      const badge = document.getElementById("camStatusBadge");
+      const toggleBtn = document.getElementById("btnToggleCamPower");
+
+      // Stop existing stream
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(t => t.stop());
+        webcamStream = null;
+      }
+
+      if (val.startsWith("usb:")) {
+        const deviceId = val.substring(4);
+        try {
+          logTerm("[Camera] Starting USB UVC camera stream...");
+          dot.style.backgroundColor = "#ffcc00";
+          badge.innerText = "STARTING USB...";
+          badge.style.color = "#ffcc00";
+
+          const constraints = {
+            video: {
+              deviceId: deviceId ? { exact: deviceId } : undefined,
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            }
+          };
+
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          webcamStream = stream;
+          isCameraRunning = true;
+
+          if (img) img.style.display = "none";
+          if (offlineNotice) offlineNotice.style.display = "none";
+          if (video) {
+            video.srcObject = stream;
+            video.style.display = "block";
+          }
+
+          dot.style.backgroundColor = "#2cff55";
+          badge.innerText = "USB CAM [LIVE]";
+          badge.style.color = "var(--mil-hit)";
+          if (toggleBtn) {
+            toggleBtn.innerText = "STOP CAM";
+            toggleBtn.classList.remove("ref-btn-accent");
+            toggleBtn.style.backgroundColor = "#5c1818";
+          }
+          logTerm("[Camera] USB camera stream active!");
+        } catch (err) {
+          logTerm(`[USB Camera Error] ${err.name}: ${err.message}`);
+          dot.style.backgroundColor = "#ff4444";
+          badge.innerText = "USB ERROR";
+          badge.style.color = "#ff4444";
+          if (offlineNotice) {
+            document.getElementById("cameraOfflineDesc").innerText = `USB Cam Error: ${err.message}`;
+            offlineNotice.style.display = "flex";
+          }
+        }
+      } else {
+        // WiFi MJPEG mode
+        if (video) {
+          video.srcObject = null;
+          video.style.display = "none";
+        }
+        reloadCameraStream();
+      }
+    }
+
+    function toggleCameraPower() {
+      if (isCameraRunning) {
+        stopCamera();
+      } else {
+        startSelectedCamera();
+      }
+    }
+
+    function stopCamera() {
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(t => t.stop());
+        webcamStream = null;
+      }
+      isCameraRunning = false;
+
+      const video = document.getElementById("webcamVideo");
+      const img = document.getElementById("espCameraImg");
+      const dot = document.getElementById("camStatusDot");
+      const badge = document.getElementById("camStatusBadge");
+      const toggleBtn = document.getElementById("btnToggleCamPower");
+
+      if (video) {
+        video.srcObject = null;
+        video.style.display = "none";
+      }
+      if (img) img.style.display = "none";
+
+      dot.style.backgroundColor = "#888888";
+      badge.innerText = "CAM PAUSED";
+      badge.style.color = "#888888";
+      if (toggleBtn) {
+        toggleBtn.innerText = "START CAM";
+        toggleBtn.classList.add("ref-btn-accent");
+        toggleBtn.style.backgroundColor = "";
+      }
+      logTerm("[Camera] Video paused.");
+    }
+
+    // Camera Stream Connection & Status (WiFi MJPEG)
+    function reloadCameraStream() {
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(t => t.stop());
+        webcamStream = null;
+      }
+
+      const input = document.getElementById("cameraStreamUrlInput");
+      let url = input ? input.value.trim() : "http://192.168.4.1/";
+      if (!url) url = "http://192.168.4.1/";
+
+      const img = document.getElementById("espCameraImg");
+      const video = document.getElementById("webcamVideo");
+      const offlineNotice = document.getElementById("cameraOfflineNotice");
+      const dot = document.getElementById("camStatusDot");
+      const badge = document.getElementById("camStatusBadge");
+
+      if (video) video.style.display = "none";
+      if (img) img.style.display = "block";
+      if (offlineNotice) offlineNotice.style.display = "none";
+
+      dot.style.backgroundColor = "#ffcc00";
+      badge.innerText = "CONNECTING...";
+      badge.style.color = "#ffcc00";
+
+      const cacheBustUrl = url.includes("?") ? `${url}&_t=${Date.now()}` : `${url}?_t=${Date.now()}`;
+      img.src = cacheBustUrl;
+      logTerm(`[Camera] Connecting to WiFi MJPEG stream at ${url}...`);
+    }
+
+    function onCameraStreamLoad() {
+      const dot = document.getElementById("camStatusDot");
+      const badge = document.getElementById("camStatusBadge");
+      const offlineNotice = document.getElementById("cameraOfflineNotice");
+
+      dot.style.backgroundColor = "#2cff55";
+      badge.innerText = "WIFI CAM [LIVE]";
+      badge.style.color = "var(--mil-hit)";
+      if (offlineNotice) offlineNotice.style.display = "none";
+      logTerm("[Camera] WiFi ESP32-CAM stream connected successfully.");
+    }
+
+    function onCameraStreamError() {
+      if (webcamStream) return;
+      const dot = document.getElementById("camStatusDot");
+      const badge = document.getElementById("camStatusBadge");
+      const offlineNotice = document.getElementById("cameraOfflineNotice");
+      const desc = document.getElementById("cameraOfflineDesc");
+      const input = document.getElementById("cameraStreamUrlInput");
+
+      dot.style.backgroundColor = "#ff4444";
+      badge.innerText = "WIFI OFFLINE";
+      badge.style.color = "#ff4444";
+
+      const currentUrl = input ? input.value : "http://192.168.4.1/";
+      if (desc) desc.innerText = `Could not reach ${currentUrl}. ESP32-CAM may be plugged via USB instead of WiFi.`;
+      if (offlineNotice) offlineNotice.style.display = "flex";
+
+      logTerm(`[Camera] Note: WiFi stream ${currentUrl} offline. Switching to USB UVC mode if connected via USB.`);
+    }
+
+    // Optical Hit Detection & Scoring from Lalith689/camera
+    function handleCameraFeedClick(e) {
+      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+
+      const container = document.getElementById("cameraViewportContainer");
+      const rect = container.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      const scaleX = 150.0 / rect.width;
+      const scaleY = 150.0 / rect.height;
+      const xMm = clickX * scaleX;
+      const yMm = clickY * scaleY;
+
+      const dx = xMm - 75.0;
+      const dy = yMm - 75.0;
+      const radialMm = Math.sqrt(dx * dx + dy * dy);
+
+      let score = 0;
+      let scoreLabel = "MISS";
+      let hitColor = "var(--mil-miss)";
+
+      if (radialMm <= 8.0) {
+        score = 10;
+        scoreLabel = "BULLSEYE 10";
+        hitColor = "#ffcc00";
+      } else if (radialMm <= 20.0) {
+        score = 9;
+        scoreLabel = "RING 9";
+        hitColor = "var(--mil-hit)";
+      } else if (radialMm <= 35.0) {
+        score = 8;
+        scoreLabel = "RING 8";
+        hitColor = "var(--mil-hit)";
+      } else if (radialMm <= 50.0) {
+        score = 7;
+        scoreLabel = "RING 7";
+        hitColor = "var(--mil-hit)";
+      } else if (radialMm <= 66.0) {
+        score = 6;
+        scoreLabel = "RING 6";
+        hitColor = "#ffaa00";
+      } else {
+        score = 0;
+        scoreLabel = "OUT OF RINGS (MISS)";
+        hitColor = "var(--mil-miss)";
+      }
+
+      const dot = document.createElement("div");
+      dot.style.position = "absolute";
+      dot.style.left = `${(clickX / rect.width) * 100}%`;
+      dot.style.top = `${(clickY / rect.height) * 100}%`;
+      dot.style.width = "10px";
+      dot.style.height = "10px";
+      dot.style.transform = "translate(-50%, -50%)";
+      dot.style.borderRadius = "50%";
+      dot.style.backgroundColor = hitColor;
+      dot.style.border = "1.5px solid #ffffff";
+      dot.style.boxShadow = `0 0 10px ${hitColor}`;
+      dot.style.pointerEvents = "none";
+      dot.title = `Score: ${score} (${scoreLabel}) | Dev: ${radialMm.toFixed(1)}mm`;
+
+      const impactLayer = document.getElementById("camImpactDotsContainer");
+      if (impactLayer) impactLayer.appendChild(dot);
+
+      logTerm(`[Optical Hit] ${scoreLabel} (${score} pts) | Dev: ${radialMm.toFixed(1)}mm | Point: (${xMm.toFixed(1)}mm, ${yMm.toFixed(1)}mm)`);
+    }
+
+    // Camera Snapshot Grabber
+    function takeCameraSnapshot() {
+      try {
+        const offCanvas = document.createElement("canvas");
+        offCanvas.width = 640;
+        offCanvas.height = 480;
+        const ctx = offCanvas.getContext("2d");
+
+        const video = document.getElementById("webcamVideo");
+        const img = document.getElementById("espCameraImg");
+
+        if (webcamStream && video && video.style.display !== "none") {
+          ctx.drawImage(video, 0, 0, 640, 480);
+        } else if (img && img.style.display !== "none") {
+          ctx.drawImage(img, 0, 0, 640, 480);
+        }
+
+        ctx.strokeStyle = "rgba(255, 204, 0, 0.7)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(20, 20, 600, 440);
+
+        ctx.beginPath();
+        ctx.arc(320, 240, 30, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ffcc00";
+        ctx.stroke();
+
+        ctx.font = "bold 14px monospace";
+        ctx.fillStyle = "#2cff55";
+        ctx.fillText(`SNYPTR OPTICAL CAM // ${new Date().toLocaleTimeString()}`, 30, 45);
+
+        const link = document.createElement("a");
+        link.download = `snyptr_snapshot_${Date.now()}.png`;
+        link.href = offCanvas.toDataURL("image/png");
+        link.click();
+
+        logTerm("[Camera Snapshot] Frame captured and saved successfully.");
+      } catch (err) {
+        logTerm(`[Snapshot Error] ${err.message}.`);
+      }
+    }
+
+    // --- WEB SERIAL COMM ---
+    async function toggleConnectSerial() {
+      if (isConnected) {
+        await disconnectSerial();
+      } else {
+        await connectSerial();
+      }
+    }
+
+    async function connectSerial() {
+      if (!("serial" in navigator)) {
+        alert("Web Serial API is not supported in this browser. Please use Chrome or Edge.");
+        return;
+      }
+
+      try {
+        logTerm("[Serial] Requesting ESP32 port...");
+        const paired = await navigator.serial.getPorts();
+        if (paired.length > 0 && !port) {
+          port = paired[0];
+        } else {
+          port = await navigator.serial.requestPort();
+        }
+
+        await port.open({ baudRate: 115200 });
+
+        try {
+          await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        } catch (e) {}
+
+        isConnected = true;
+        updateConnectionUI(true);
+        logTerm("[Serial] Connected to ESP32 at 115200 baud! Motor halted [IDLE].");
+
+        readSerialLoop();
+        // Immediately enforce STOP on connection to prevent any residual motor movement
+        setTimeout(() => sendRawCommand("STOP"), 80);
+        setTimeout(() => sendRawCommand(`SPEED,${motorSpeedPercent}`), 350);
+      } catch (err) {
+        logTerm(`[Serial Error] ${err.message}`);
+        updateConnectionUI(false);
+      }
+    }
+
+    // Safety: halt motor immediately if user clicks outside browser or switches tabs
+    window.addEventListener('blur', () => {
+      if (drivingDirection !== null) {
+        emergencyBrake();
+        logTerm("[Safety] Window lost focus: Motor halted automatically.");
+      }
+    });
+
+    async function disconnectSerial() {
+      isConnected = false;
+      try {
+        if (reader) {
+          await reader.cancel();
+          reader.releaseLock();
+          reader = null;
+        }
+        if (port) {
+          await port.close();
+          port = null;
+        }
+      } catch (e) {}
+      updateConnectionUI(false);
+      logTerm("[Serial] Disconnected.");
+    }
+
+    function updateConnectionUI(connected) {
+      const dot = document.getElementById("serialStatusDot");
+      const text = document.getElementById("serialStatusText");
+      const btn = document.getElementById("btnConnectSerial");
+
+      if (connected) {
+        dot.style.backgroundColor = "#2cff55";
+        text.innerText = "ESP32 CONNECTED";
+        btn.style.backgroundColor = "#1b3a20";
+      } else {
+        dot.style.backgroundColor = "#ffcc00";
+        text.innerText = "CONNECT ESP32";
+        btn.style.backgroundColor = "#2c5934";
+      }
+    }
+
+    async function readSerialLoop() {
+      let buffer = "";
+      const decoder = new TextDecoder();
+
+      try {
+        reader = port.readable.getReader();
+        while (isConnected && port && port.readable) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            let lines = buffer.split("\n");
+            buffer = lines.pop();
+
+            for (let line of lines) {
+              handleIncomingSerial(line.trim());
+            }
+          }
+        }
+      } catch (err) {
+        if (isConnected) logTerm(`[Serial Error] ${err.message}`);
+      } finally {
+        if (reader) {
+          try { reader.releaseLock(); } catch(e){}
+          reader = null;
+        }
+      }
+    }
+
+    function handleIncomingSerial(line) {
+      if (!line) return;
+      logTerm(`◄ ${line}`);
+
+      // Parse servo confirmations from pop.ino (UP_CONFIRMED,<id> or DOWN_CONFIRMED,<id|ALL>)
+      if (line.includes("UP_CONFIRMED")) {
+        const parts = line.split(",");
+        const id = parts[1] ? parts[1].trim() : "1";
+        logTerm(`[ESP32 Confirmed] Target ${id} raised (UP_CONFIRMED)`);
+        const badge = document.getElementById("servoStatusBadge");
+        if (badge) {
+          badge.innerText = `T${id} CONFIRMED UP`;
+          badge.style.color = "var(--mil-hit)";
+        }
+      } else if (line.includes("DOWN_CONFIRMED")) {
+        logTerm(`[ESP32 Confirmed] Targets lowered (${line})`);
+        const badge = document.getElementById("servoStatusBadge");
+        if (badge) {
+          badge.innerText = `CONCEALED [DOWN]`;
+          badge.style.color = "var(--text-muted)";
+        }
+      } else if (line.includes("STATUS: READY")) {
+        logTerm("[ESP32] Servo Target Controller Ready (PCA9685 online).");
+        const badge = document.getElementById("servoStatusBadge");
+        if (badge) {
+          badge.innerText = "SERVO READY";
+          badge.style.color = "var(--mil-hit)";
+        }
+      } else if (line.includes("Movement complete") || line.includes("Emergency Stop")) {
+        if (drivingDirection !== null) {
+          updateUIOnStop();
+          stopCarAnimation();
+          drivingDirection = null;
+        }
+      }
+    }
+
+    async function sendRawCommand(cmd) {
+      logTerm(`► ${cmd}`);
+
+      // 1. Send over USB UART if Motor / Bridge ESP32 is connected via Serial
+      if (isConnected && port && port.writable) {
+        try {
+          const encoder = new TextEncoder();
+          const writer = port.writable.getWriter();
+          await writer.write(encoder.encode(cmd + "\n"));
+          writer.releaseLock();
+        } catch (e) {
+          logTerm(`[Write Error] ${e.message}`);
+        }
+      }
+
+      // 2. ALWAYS ALSO send Pop-Up Target commands (UP, DOWN, etc.) over Wi-Fi to Pop-Up ESP32 (http://192.168.4.1)
+      //    even when Motor UART is connected!
+      const isPopTargetCmd = cmd.startsWith("UP") || cmd.startsWith("DOWN") || cmd === "PING" || cmd === "STATUS";
+      if (isPopTargetCmd || !isConnected) {
+        const input = document.getElementById("cameraStreamUrlInput");
+        let wifiBaseUrl = input ? input.value.trim() : "http://192.168.4.1/";
+        if (!wifiBaseUrl.startsWith("http")) wifiBaseUrl = "http://" + wifiBaseUrl;
+        wifiBaseUrl = wifiBaseUrl.replace(/\/+$/, "");
+
+        try {
+          fetch(`${wifiBaseUrl}/cmd?action=${encodeURIComponent(cmd)}`, { method: "POST", mode: "no-cors" }).catch(() => {});
+          logTerm(`[WiFi Target] Dispatched '${cmd}' wirelessly to Pop-Up ESP32 at ${wifiBaseUrl}`);
+        } catch (e) {}
+      }
+    }
+
+    // Multi-Source Telemetry Polling (Python Vision Backend @ :8001 + Pop ESP32 @ 192.168.4.1)
+    let ignoredStaticX = -1;
+    let ignoredStaticY = -1;
+    let ignoredStaticPx = 0;
+    let pythonBackendConnected = false;
+
+    async function pollWifiTelemetry() {
+      // 1. Try Python Computer Vision Backend Unit first (http://localhost:8001/metrics)
+      try {
+        const pyRes = await fetch("http://localhost:8001/metrics", { signal: AbortSignal.timeout(400) });
+        if (pyRes.ok) {
+          const pyData = await pyRes.json();
+          pythonBackendConnected = true;
+
+          // Connect video element to Python HUD stream if not connected
+          const camImg = document.getElementById("espCameraImg");
+          if (camImg && (!camImg.src || !camImg.src.includes("8001"))) {
+            camImg.src = "http://localhost:8001/video_feed";
+            camImg.style.display = "block";
+            const offlineNotice = document.getElementById("cameraOfflineNotice");
+            if (offlineNotice) offlineNotice.style.display = "none";
+          }
+
+          const telem = document.getElementById("hudCvTelemetry");
+          if (telem) {
+            telem.textContent = `PY-CV: ${pyData.fps} FPS // TARGET: ${pyData.target_state} // HIT: ${pyData.hit ? 'YES' : 'NO'}`;
+            telem.setAttribute("fill", pyData.hit ? "#2cff55" : "#ffcc00");
+          }
+
+          if (pyData.hit && !stuckBulletAcknowledged && elevationState === 'UP') {
+            const hx = (pyData.x_norm || 0.5) * 160;
+            const hy = (pyData.y_norm || 0.5) * 160;
+            const rb = document.getElementById("shotResultBadge");
+            if (rb) {
+              rb.innerText = `🎯 HIT DETECTED! (${pyData.dart_pixels} PX, ${pyData.confidence}%) — TARGET DROPPED`;
+              rb.style.color = "#2cff55";
+              rb.style.borderColor = "#2cff55";
+            }
+            handleNerfBulletStuck(hx, hy, 0, true, `PYTHON CV UNIT (${pyData.dart_pixels} PX, ${pyData.confidence}%)`);
+            return;
+          }
+          if (pyData.hit) return;
+        }
+      } catch (e) {
+        pythonBackendConnected = false;
+      }
+
+      // 2. Direct Pop-Up ESP32 Fallback Polling (http://192.168.4.1/telemetry)
+      try {
+        const input = document.getElementById("cameraStreamUrlInput");
+        let wifiBaseUrl = input ? input.value.trim() : "http://192.168.4.1/";
+        if (!wifiBaseUrl.startsWith("http")) wifiBaseUrl = "http://" + wifiBaseUrl;
+        wifiBaseUrl = wifiBaseUrl.replace(/\/+$/, "");
+        const res = await fetch(`${wifiBaseUrl}/telemetry`, { signal: AbortSignal.timeout(500) });
+        if (res.ok) {
+          const data = await res.json();
+          const telem = document.getElementById("hudCvTelemetry");
+          const nowMs = Date.now();
+          const timeSincePop = nowMs - (window.lastPopUpTimeMs || 0);
+          const isArmedAndSettled = (elevationState === 'UP' && timeSincePop >= 1200);
+
+          if (data.hit) {
+            const hx = (typeof data.x === "number" && data.x > 0) ? data.x : 80;
+            const hy = (typeof data.y === "number" && data.y > 0) ? data.y : 80;
+            const px = data.dartPixels || 0;
+
+            if (!isArmedAndSettled) {
+              ignoredStaticX = hx;
+              ignoredStaticY = hy;
+              ignoredStaticPx = px;
+            } else if (!stuckBulletAcknowledged) {
+              const isFallback80 = (hx === 80 && hy === 80);
+              const isSameStaticSpot = (ignoredStaticX > 0 && Math.abs(hx - ignoredStaticX) <= 12 && Math.abs(hy - ignoredStaticY) <= 12 && Math.abs(px - ignoredStaticPx) < 40);
+              if (!isFallback80 && !isSameStaticSpot) {
+                const rb = document.getElementById("shotResultBadge");
+                if (rb) {
+                  rb.innerText = `🎯 HIT DETECTED! (${px} PX) — TARGET DROPPED`;
+                  rb.style.color = "#2cff55";
+                  rb.style.borderColor = "#2cff55";
+                }
+                handleNerfBulletStuck(hx, hy, 0, true, `ESP32-P4 STANDALONE HIT (${px} PX)`);
+              }
+            }
+          }
+
+          if (telem && !stuckBulletAcknowledged && !pythonBackendConnected) {
+            telem.textContent = `WIFI LINK: OK // TARGET: ${elevationState} // STATUS: ${isArmedAndSettled ? 'ARMED FOR HIT' : 'STANDBY'}`;
+            telem.setAttribute("fill", isArmedAndSettled ? "#ffcc00" : "#2cff55");
+          }
+        }
+      } catch (e) {}
+    }
+    setInterval(pollWifiTelemetry, 350);
+
+    // --- TERMINAL LOGGING ---
+    function logTerm(msg) {
+      const out = document.getElementById("terminalOutput");
+      const line = document.createElement("div");
+      line.innerText = msg;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function clearTerminal() {
+      document.getElementById("terminalOutput").innerHTML = "";
+    }
+
+    function toggleTerminalModal() {
+      const modal = document.getElementById("terminalModal");
+      modal.style.display = (modal.style.display === "flex") ? "none" : "flex";
+    }
+
+    // Init
+    renderCarPosition();
+    refreshCameraDevices(); // Auto-scan for USB2.0 HD UVC WebCam & start stream
+    startCvDetectionLoop();  // Start continuous real-time CV bullet detection engine
+    logTerm("[System] 2D Car Manual Arrow Drive Dashboard loaded.");
+    logTerm("[System] Camera: Auto-scanning for directly connected ESP32-P4 USB camera.");
+    logTerm("[System] Pop Target: Pop Target 1 [0] sends 'UP,1' / 'DOWN,1' to COM7.");
+  </script>
+</body>
+</html>

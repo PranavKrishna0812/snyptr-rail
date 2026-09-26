@@ -1,0 +1,10 @@
+build/
+managed_components/
+__pycache__/
+*.pyc
+scratch/
+*.raw
+*.jpg
+*.png
+sdkconfig.old
+saved_chat_history.md

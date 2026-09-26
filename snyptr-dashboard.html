@@ -1,0 +1,1769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SNYPTR — 1.74m Moving Target System (Continuous Arrow Drive)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* AUTHENTIC MILITARY PALETTE (FROM SNYPTR REPOSITORY) */
+      --mil-canvas: #ded8ce;           /* Warm stone / light sand canvas */
+      --mil-canvas-tint: #e8e4dc;      /* Lighter warm stone */
+      --mil-card-bg: #f5f2ec;          /* Sand-white card surface */
+      --mil-white: #ffffff;            /* Pure white target / inset */
+      
+      --mil-dark: #242923;             /* Deep tactical olive-slate */
+      --mil-dark-card: #2f352e;        /* Dark tile background */
+      --mil-dark-border: #1a1e19;      /* Strong dark border */
+      --mil-border-light: #c8c2b5;     /* Subtle stone border */
+      
+      --text-dark: #1b1f1a;            /* Primary dark text */
+      --text-muted: #5e665c;           /* Muted text */
+      --text-light: #f5f5f3;           /* White text on dark elements */
+      --text-sand: #d6cfc3;            /* Sand accent text */
+      
+      --mil-hit: #2c5934;              /* Deep military green for hit */
+      --mil-miss: #8a2a2a;             /* Deep brick red for miss */
+      
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: var(--mil-canvas);
+      color: var(--text-dark);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: var(--mil-canvas-tint);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--mil-border-light);
+      border-radius: 2px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--mil-dark);
+    }
+
+    /* Reference-inspired card panels */
+    .ref-panel {
+      background-color: var(--mil-card-bg);
+      border: 1px solid var(--mil-border-light);
+      box-shadow: 0 2px 6px rgba(36, 41, 35, 0.08);
+    }
+
+    /* 3 Hero Command Tiles */
+    .ref-cmd-tile {
+      background: var(--mil-dark-card);
+      border: 2px solid var(--mil-dark-border);
+      color: var(--text-light);
+      padding: 10px 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.12s ease;
+      text-transform: uppercase;
+      position: relative;
+      min-height: 68px;
+    }
+
+    .ref-cmd-tile:hover:not(:disabled) {
+      background: #3a4239;
+      border-color: #525c50;
+      transform: translateY(-1px);
+    }
+
+    .ref-cmd-tile:active:not(:disabled) {
+      background: #1c201b;
+      transform: translateY(1px);
+    }
+
+    .ref-cmd-tile.active-run {
+      background: #283a2a !important;
+      border-color: #4a754e !important;
+      box-shadow: 0 0 14px rgba(74, 117, 78, 0.45);
+    }
+
+    .ref-cmd-tile.active-stop {
+      background: #3a3328 !important;
+      border-color: #736245 !important;
+    }
+
+    .ref-cmd-tile.active-pop {
+      background: #333d36 !important;
+      border-color: #617869 !important;
+    }
+
+    .ref-tile-key {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 900;
+      color: #ffffff;
+      margin-bottom: 2px;
+      letter-spacing: 0.05em;
+    }
+
+    .ref-tile-title {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+    }
+
+    .ref-tile-sub {
+      font-size: 9px;
+      color: var(--text-sand);
+      font-family: var(--font-mono);
+      margin-top: 2px;
+    }
+
+    /* Reference buttons */
+    .ref-btn {
+      background: var(--mil-dark);
+      color: #ffffff;
+      border: 1px solid var(--mil-dark-border);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      padding: 6px 12px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.1s ease;
+      user-select: none;
+    }
+
+    .ref-btn:hover:not(:disabled) {
+      background: #384037;
+      transform: translateY(-1px);
+    }
+
+    .ref-btn:active:not(:disabled) {
+      background: #1c201b;
+      transform: translateY(1px);
+    }
+
+    .ref-btn-light {
+      background: #ffffff;
+      color: var(--text-dark);
+      border: 1px solid var(--mil-border-light);
+    }
+
+    .ref-btn-light:hover:not(:disabled) {
+      background: var(--mil-canvas-tint);
+    }
+
+    .ref-btn-accent {
+      background: #2c5934;
+      border-color: #1e3f24;
+      color: #ffffff;
+    }
+    .ref-btn-accent:hover:not(:disabled) {
+      background: #366d40;
+    }
+
+    .ref-btn-shuttle-active {
+      background: #283a2a !important;
+      border-color: #4a754e !important;
+      box-shadow: 0 0 12px rgba(74, 117, 78, 0.5) !important;
+      animation: pulse-shuttle 1.5s infinite;
+    }
+
+    @keyframes pulse-shuttle {
+      0%, 100% { border-color: #4a754e; }
+      50% { border-color: #88c28e; }
+    }
+
+    .carriage-marker {
+      transition: left 0.15s linear;
+    }
+
+    .stop-marker-transition {
+      transition: left 0.1s ease-out;
+    }
+  </style>
+</head>
+<body style="display: flex; flex-direction: column; height: 100vh; overflow: hidden;">
+
+  <!-- Tactical Header -->
+  <div style="user-select: none; display: flex; flex-direction: column;">
+    <!-- Top Banner -->
+    <header style="
+      background-color: #272c26;
+      padding: 7px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #1a1e19;
+    ">
+      <!-- Left: Boxed Logo Badge -->
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <div style="
+          border: 2px solid #ffffff;
+          padding: 3px 10px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background-color: #1d221c;
+        ">
+          <span style="font-size: 14px; color: #ffffff;">⊕</span>
+          <span style="
+            font-family: var(--font-mono);
+            font-size: 15px;
+            font-weight: 900;
+            letter-spacing: 0.14em;
+            color: #ffffff;
+          ">
+            SNYPTR
+          </span>
+        </div>
+
+        <div style="
+          font-family: var(--font-sans);
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.1em;
+          color: var(--text-sand);
+          text-transform: uppercase;
+        ">
+          1.74m Rail System // GT2 30T Pulley (33.33 steps/cm)
+        </div>
+      </div>
+
+      <!-- Right: Connection & Status Controls -->
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <!-- Serial Connection Status Pill -->
+        <button id="btnConnectSerial" onclick="toggleConnectSerial()" class="ref-btn ref-btn-accent" style="display: flex; align-items: center; gap: 6px;" title="Connect directly to ESP32 over USB at 115200 baud">
+          <span id="serialStatusDot" style="width: 7px; height: 7px; border-radius: 50%; background-color: #ffcc00; display: inline-block;"></span>
+          <span id="serialStatusText">CONNECT ESP32</span>
+        </button>
+
+        <!-- System State Pill -->
+        <span id="headerSysStatus" style="
+          background-color: #353c34;
+          color: #ffffff;
+          padding: 5px 10px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 700;
+        ">
+          SYS: READY
+        </span>
+
+        <span style="
+          background-color: #1d221c;
+          border: 1px solid #3a4239;
+          color: var(--text-sand);
+          padding: 5px 10px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 700;
+        ">
+          SESSION 01
+        </span>
+
+        <a href="drive-dashboard.html" class="ref-btn" style="text-decoration: none; background-color: #2b3329; border-color: #4b5847;" title="Switch to 2D Car Arrow Drive dashboard (no distance parameters)">
+          2D CAR ARROW DRIVE ↗
+        </a>
+
+        <button onclick="resetSession()" class="ref-btn">
+          NEW SESSION
+        </button>
+
+        <button onclick="toggleTerminalModal()" class="ref-btn ref-btn-light" title="Open Serial Console">
+          LOG / TERMINAL
+        </button>
+      </div>
+    </header>
+
+    <!-- Sub-Bar Navigation Strip (Arrow & Control Shortcuts) -->
+    <div style="
+      background-color: #1e221d;
+      padding: 5px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-sand);
+      border-bottom: 1px solid var(--mil-border-light);
+    ">
+      <div style="display: flex; gap: 16px; font-weight: 600;">
+        <span><b style="color: #ffffff;">[R]</b> RETURN TO 0.0m ORIGIN</span>
+        <span><b style="color: #ffffff;">[S / SPACE]</b> START / STOP TARGET</span>
+        <span><b style="color: #ffffff;">[◄ / ←]</b> DRIVE TO 0.0m</span>
+        <span><b style="color: #ffffff;">[► / →]</b> DRIVE TO STOP POINT</span>
+        <span><b style="color: #ffffff;">[▲ / ▼]</b> AUTO SHUTTLE</span>
+        <span><b style="color: #ffffff;">[ESC]</b> ESTOP</span>
+      </div>
+
+      <div id="subbarNotice" style="color: #9a9486; font-size: 10px;">
+        PRESS [S] TO START/STOP TARGET // PRESS [R] TO RETURN TO 0.0m ORIGIN
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Operational Container -->
+  <div style="
+    flex: 1;
+    padding: 8px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  ">
+    <!-- Top Session Scoring HUD -->
+    <div style="
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr 1fr;
+      gap: 8px;
+      width: 100%;
+    ">
+      <!-- 20-Shot Progression -->
+      <div class="ref-panel" style="
+        padding: 8px 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background-color: #ffffff;
+      ">
+        <div>
+          <div style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+            ENGAGEMENT
+          </div>
+          <div style="
+            font-family: var(--font-mono);
+            font-size: 22px;
+            font-weight: 900;
+            color: var(--text-dark);
+            line-height: 1.0;
+            margin-top: 2px;
+          ">
+            SHOT <span id="hudShotNum">00</span> <span style="color: var(--text-muted); font-size: 14px; font-weight: 600;">/ 20</span>
+          </div>
+        </div>
+
+        <div style="text-align: right;">
+          <div style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+            REMAINING
+          </div>
+          <div id="hudRemaining" style="
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--mil-dark);
+            margin-top: 1px;
+          ">
+            20
+          </div>
+        </div>
+      </div>
+
+      <!-- Hits -->
+      <div class="ref-panel" style="
+        padding: 8px 14px;
+        background-color: #ffffff;
+        border-left: 4px solid var(--mil-hit);
+      ">
+        <div style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+          HITS
+        </div>
+        <div id="hudHits" style="
+          font-family: var(--font-mono);
+          font-size: 22px;
+          font-weight: 900;
+          color: var(--mil-hit);
+          margin-top: 2px;
+          line-height: 1.0;
+        ">
+          0
+        </div>
+      </div>
+
+      <!-- Misses -->
+      <div class="ref-panel" style="
+        padding: 8px 14px;
+        background-color: #ffffff;
+        border-left: 4px solid var(--mil-miss);
+      ">
+        <div style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+          MISSES
+        </div>
+        <div id="hudMisses" style="
+          font-family: var(--font-mono);
+          font-size: 22px;
+          font-weight: 900;
+          color: var(--mil-miss);
+          margin-top: 2px;
+          line-height: 1.0;
+        ">
+          0
+        </div>
+      </div>
+
+      <!-- Accuracy -->
+      <div class="ref-panel" style="
+        padding: 8px 14px;
+        background-color: #ffffff;
+        border-left: 4px solid var(--mil-dark);
+      ">
+        <div style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+          ACCURACY
+        </div>
+        <div id="hudAccuracy" style="
+          font-family: var(--font-mono);
+          font-size: 22px;
+          font-weight: 900;
+          color: var(--text-dark);
+          margin-top: 2px;
+          line-height: 1.0;
+        ">
+          0.0%
+        </div>
+      </div>
+    </div>
+
+    <!-- Main 2-Column Combat Console -->
+    <main style="
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(400px, 1.05fr) minmax(480px, 1.35fr);
+      gap: 8px;
+      min-height: 0;
+    ">
+      <!-- Left Column: Hero Target Stage -->
+      <div style="min-height: 0; height: 100%;">
+        <div class="ref-panel" style="
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          padding: 12px;
+        ">
+          <!-- Target Header -->
+          <div style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--mil-border-light);
+          ">
+            <div style="
+              font-family: var(--font-mono);
+              font-size: 11px;
+              font-weight: 800;
+              letter-spacing: 0.1em;
+              color: var(--text-dark);
+              text-transform: uppercase;
+            ">
+              TARGET // 150 mm × 150 mm
+            </div>
+
+            <span id="targetElevationBadge" style="
+              font-family: var(--font-mono);
+              font-size: 10px;
+              font-weight: 800;
+              padding: 2px 7px;
+              background-color: var(--mil-hit);
+              color: #ffffff;
+            ">
+              EXPOSED [5.0s]
+            </span>
+          </div>
+
+          <!-- Target Canvas Stage -->
+          <div style="
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            padding: 8px 0 0 0;
+          ">
+            <!-- 5-Second Exposure Progress Bar -->
+            <div style="width: 100%; max-width: 350px;">
+              <div style="
+                display: flex;
+                justify-content: space-between;
+                font-family: var(--font-mono);
+                font-size: 9px;
+                font-weight: 700;
+                color: var(--text-muted);
+                margin-bottom: 3px;
+              ">
+                <span>5.0s EXPOSURE TIMER</span>
+                <span id="exposureTimerLabel" style="color: var(--text-dark);">READY</span>
+              </div>
+
+              <div style="
+                width: 100%;
+                height: 5px;
+                background-color: var(--mil-canvas-tint);
+                border: 1px solid var(--mil-border-light);
+                overflow: hidden;
+              ">
+                <div id="exposureProgressBar" style="
+                  width: 100%;
+                  height: 100%;
+                  background-color: var(--mil-dark);
+                  transition: width 0.1s linear;
+                "></div>
+              </div>
+            </div>
+
+            <!-- Physical Target Frame -->
+            <div style="
+              position: relative;
+              padding: 8px;
+              background-color: #2b302a;
+              border: 1px solid #1a1e19;
+              box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+              perspective: 800px;
+            ">
+              <!-- Target Face -->
+              <div id="targetFace" onclick="handleTargetClick(event)" style="
+                width: 290px;
+                height: 290px;
+                background-color: #ffffff;
+                position: relative;
+                cursor: crosshair;
+                border: 1px solid #c8c2b5;
+                overflow: hidden;
+                transition: transform 0.28s cubic-bezier(0.2, 0, 0, 1), opacity 0.28s ease;
+              ">
+                <!-- SVG Target Markings -->
+                <svg
+                  viewBox="0 0 150 150"
+                  style="width: 100%; height: 100%; position: absolute; top: 0; left: 0; pointer-events: none;"
+                >
+                  <!-- Outer boundary & crosshairs -->
+                  <rect x="2" y="2" width="146" height="146" fill="none" stroke="#242923" stroke-width="1.2" />
+                  <line x1="75" y1="0" x2="75" y2="150" stroke="#7a8277" stroke-width="0.5" stroke-dasharray="2 2" />
+                  <line x1="0" y1="75" x2="150" y2="75" stroke="#7a8277" stroke-width="0.5" stroke-dasharray="2 2" />
+
+                  <!-- Concentric Scoring Rings -->
+                  <circle cx="75" cy="75" r="66" fill="none" stroke="#242923" stroke-width="1.0" />
+                  <circle cx="75" cy="75" r="50" fill="none" stroke="#242923" stroke-width="1.2" />
+                  <circle cx="75" cy="75" r="35" fill="none" stroke="#1a1e19" stroke-width="1.4" />
+                  <circle cx="75" cy="75" r="20" fill="none" stroke="#1a1e19" stroke-width="1.6" stroke-dasharray="3 1.5" />
+
+                  <!-- Zone Score Labels -->
+                  <text x="77" y="13" fill="#242923" font-size="4.5" font-family="monospace" font-weight="800">ZONE 1</text>
+                  <text x="77" y="28" fill="#242923" font-size="4.5" font-family="monospace" font-weight="800">ZONE 2</text>
+                  <text x="77" y="43" fill="#1a1e19" font-size="4.5" font-family="monospace" font-weight="800">ZONE 3</text>
+                  <text x="77" y="58" fill="#1a1e19" font-size="4.5" font-family="monospace" font-weight="900">ZONE 4</text>
+
+                  <!-- Bullseye Center -->
+                  <circle cx="75" cy="75" r="3" fill="#1a1e19" />
+                  <line x1="70" y1="75" x2="80" y2="75" stroke="#ffffff" stroke-width="0.75" />
+                  <line x1="75" y1="70" x2="75" y2="80" stroke="#ffffff" stroke-width="0.75" />
+
+                  <!-- Optimal ROI Indicator -->
+                  <rect
+                    x="50"
+                    y="50"
+                    width="50"
+                    height="50"
+                    fill="rgba(44, 89, 52, 0.08)"
+                    stroke="#2c5934"
+                    stroke-width="1.8"
+                    stroke-dasharray="4 2"
+                  />
+                  <text
+                    x="53"
+                    y="58"
+                    fill="#2c5934"
+                    font-size="4.2"
+                    font-family="monospace"
+                    font-weight="900"
+                  >
+                    OPTIMAL AREA
+                  </text>
+                </svg>
+
+                <!-- Impact Dots Container -->
+                <div id="impactDotsContainer"></div>
+              </div>
+            </div>
+
+            <!-- Last Impact Verdict -->
+            <div style="
+              width: 100%;
+              max-width: 350px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              background-color: #ffffff;
+              border: 1px solid var(--mil-border-light);
+              padding: 6px 10px;
+            ">
+              <div>
+                <div style="font-size: 8px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+                  LAST ENGAGEMENT VERDICT
+                </div>
+                <div id="verdictLabel" style="font-size: 11px; font-weight: 800; color: var(--text-dark); margin-top: 1px;">
+                  STANDBY // CLICK TARGET
+                </div>
+              </div>
+              <span id="verdictBadge" style="
+                font-family: var(--font-mono);
+                font-size: 10px;
+                font-weight: 800;
+                padding: 2px 6px;
+                background-color: var(--mil-canvas-tint);
+                color: var(--text-dark);
+                border: 1px solid var(--mil-border-light);
+              ">
+                READY
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Command Deck, Arrow Buttons & Rail Visualizer -->
+      <div style="
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+        height: 100%;
+      ">
+        <!-- Command Deck & Rail Card -->
+        <div style="flex: 1 1 70%; min-height: 0;">
+          <div class="ref-panel" style="display: flex; flex-direction: column; height: 100%; padding: 10px 12px;">
+            <!-- 3 HERO COMMAND TILES -->
+            <div>
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                <!-- TILE 1: [R] RETURN TO ORIGIN -->
+                <button id="tileReset" onclick="driveToHome()" class="ref-cmd-tile" title="Shortcut: R - Return carriage to 0.00m Origin where it started">
+                  <div class="ref-tile-key">R</div>
+                  <div class="ref-tile-title">RETURN TO ORIGIN</div>
+                  <div class="ref-tile-sub">RETURN HOME (0.0m) [R]</div>
+                </button>
+
+                <!-- TILE 2: [S] START / STOP TARGET -->
+                <button id="tileStartStop" onclick="toggleStartStop()" class="ref-cmd-tile active-run" title="Shortcut: S or Spacebar - Toggle Start and Stop motion">
+                  <div class="ref-tile-key">S</div>
+                  <div class="ref-tile-title" id="tileStartStopTitle">START TARGET</div>
+                  <div class="ref-tile-sub" id="tileStartStopSub">TO STOP POINT (1.50m) [S]</div>
+                </button>
+
+                <!-- TILE 3: [0] POP TARGET -->
+                <button id="tilePop" onclick="handlePopCommand()" class="ref-cmd-tile" title="Shortcut: 0 - 5s exposure">
+                  <div class="ref-tile-key">0</div>
+                  <div class="ref-tile-title" id="tilePopTitle">POP TARGET (5s)</div>
+                  <div class="ref-tile-sub" id="tilePopSub">SERVO FOLDED</div>
+                </button>
+              </div>
+
+              <!-- CONTINUOUS ARROW DRIVE & SHUTTLE BUTTONS -->
+              <div style="display: grid; grid-template-columns: 1fr 1.15fr 1fr; gap: 6px; margin-top: 6px;">
+                <!-- Left Arrow Button -->
+                <button id="btnArrowLeft" onclick="driveToHome()" class="ref-btn" style="padding: 7px 4px; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Keyboard Left Arrow [←] - Runs carriage back toward 0.00m">
+                  <span style="font-size: 15px; font-weight: 900; color: #ffcc00;">◄</span>
+                  <span style="font-size: 10px; font-weight: 800;">DRIVE TO 0.0m [←]</span>
+                </button>
+
+                <!-- Continuous Shuttle Toggle Button -->
+                <button id="btnAutoShuttle" onclick="toggleContinuousShuttle()" class="ref-btn" style="padding: 7px 4px; display: flex; align-items: center; justify-content: center; gap: 6px; background-color: #2b332b;" title="Keyboard Up/Down Arrow [↑/↓] - Loops back and forth continuously">
+                  <span style="font-size: 13px; color: #77ff88;">◄►</span>
+                  <span id="shuttleBtnText" style="font-size: 10px; font-weight: 800;">AUTO SHUTTLE [↑/↓]</span>
+                </button>
+
+                <!-- Right Arrow Button -->
+                <button id="btnArrowRight" onclick="driveToStopPoint()" class="ref-btn" style="padding: 7px 4px; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Keyboard Right Arrow [→] - Runs carriage forward toward Stop Point">
+                  <span style="font-size: 10px; font-weight: 800;">DRIVE TO STOP [→]</span>
+                  <span style="font-size: 15px; font-weight: 900; color: #ffcc00;">►</span>
+                </button>
+              </div>
+
+              <!-- Full-Width ESTOP Button -->
+              <button
+                id="btnEstop"
+                onclick="handleEmergencyStop()"
+                class="ref-btn"
+                style="
+                  width: 100%;
+                  margin-top: 6px;
+                  background-color: #2e342d;
+                  padding: 6px;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 8px;
+                "
+                title="Global shortcut: ESC"
+              >
+                <span style="font-weight: 900; font-size: 12px; color: #ff7777;">[ESC]</span>
+                <span style="font-size: 11px;">EMERGENCY STOP // HALT CARRIAGE</span>
+              </button>
+
+              <!-- DYNAMIC MOTOR SPEED SELECTOR -->
+              <div style="
+                margin-top: 6px;
+                background-color: #ffffff;
+                border: 1px solid var(--mil-border-light);
+                padding: 5px 8px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+              ">
+                <div style="font-family: var(--font-mono); font-size: 10px; font-weight: 800; color: var(--text-dark); white-space: nowrap;">
+                  MOTOR SPEED: <span id="speedValueLabel" style="color: var(--mil-hit); font-size: 11px;">100%</span>
+                  <span id="speedMetricLabel" style="color: var(--text-muted); font-size: 9px; font-weight: 600;">(~24.4 cm/s)</span>
+                </div>
+
+                <input
+                  id="speedSlider"
+                  type="range"
+                  min="15"
+                  max="140"
+                  value="100"
+                  step="5"
+                  oninput="onSpeedSliderChange(this.value)"
+                  style="flex: 1; accent-color: var(--mil-hit); cursor: pointer; height: 5px;"
+                  title="Adjust motor speed percentage"
+                />
+
+                <div style="display: flex; gap: 3px;">
+                  <button onclick="setSpeed(30)" class="ref-btn speed-preset-btn" id="btnSpeed30" style="padding: 2px 5px; font-size: 9px;">30%</button>
+                  <button onclick="setSpeed(60)" class="ref-btn speed-preset-btn" id="btnSpeed60" style="padding: 2px 5px; font-size: 9px;">60%</button>
+                  <button onclick="setSpeed(100)" class="ref-btn speed-preset-btn ref-btn-accent" id="btnSpeed100" style="padding: 2px 5px; font-size: 9px;">100%</button>
+                  <button onclick="setSpeed(130)" class="ref-btn speed-preset-btn" id="btnSpeed130" style="padding: 2px 5px; font-size: 9px;">130%</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- CONTINUOUS DISTANCE & RAIL TRACK -->
+            <div style="
+              margin-top: 6px;
+              background-color: #ffffff;
+              border: 1px solid var(--mil-border-light);
+              padding: 8px 12px;
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+            ">
+              <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                <div>
+                  <div style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.08em;">
+                    TARGET POSITION // 0.000m ZERO ORIGIN
+                  </div>
+                  <div style="
+                    font-family: var(--font-mono);
+                    font-size: 28px;
+                    font-weight: 900;
+                    color: var(--text-dark);
+                    letter-spacing: 0.02em;
+                    line-height: 1.0;
+                    margin-top: 2px;
+                  ">
+                    <span id="displayDistanceMeters">0.000</span> <span style="font-size: 15px; font-weight: 700; color: var(--text-muted);">m</span>
+                    <span style="font-size: 12px; font-weight: 700; color: var(--text-muted); margin-left: 6px;">(<span id="displayDistanceCm">0.0</span> cm | <span id="displayStepCount">0</span> steps)</span>
+                  </div>
+                </div>
+
+                <div style="text-align: right;">
+                  <div style="font-size: 8px; color: var(--text-muted); font-family: var(--font-mono); font-weight: 700;">
+                    CARRIAGE STATE
+                  </div>
+                  <div id="displayCarriageStatus" style="
+                    font-family: var(--font-mono);
+                    font-size: 10px;
+                    font-weight: 800;
+                    color: var(--mil-dark);
+                    margin-top: 2px;
+                    background-color: var(--mil-canvas-tint);
+                    padding: 2px 6px;
+                    border: 1px solid var(--mil-border-light);
+                  ">
+                    STOPPED // UP
+                  </div>
+                </div>
+              </div>
+
+              <!-- Precision 1.74m Rail Track with Interactive Stop Point Flag -->
+              <div>
+                <div style="
+                  display: flex;
+                  justify-content: space-between;
+                  font-size: 9px;
+                  font-family: var(--font-mono);
+                  font-weight: 800;
+                  color: var(--text-muted);
+                  margin-bottom: 3px;
+                ">
+                  <span>[SHOOTER] 0.00 m</span>
+                  <span style="color: #9e2a2b;">FLAG: STOP AT <b id="railStopPointLabel">1.50m</b></span>
+                  <span>1.74 m [MAX LIMIT]</span>
+                </div>
+
+                <div id="railTrackContainer" onclick="handleRailTrackClick(event)" style="
+                  position: relative;
+                  height: 40px;
+                  background-color: var(--mil-card-bg);
+                  border: 1px solid var(--mil-border-light);
+                  display: flex;
+                  align-items: center;
+                  cursor: pointer;
+                " title="Click anywhere on the track to set the target stop point">
+                  <!-- Metric Milestones (0.4m, 0.87m, 1.3m, 1.74m) -->
+                  <div style="position: absolute; left: 23%; height: 100%; width: 1px; background-color: var(--mil-border-light); pointer-events: none;">
+                    <span style="position: absolute; top: 2px; left: 3px; font-size: 8px; font-family: var(--font-mono); color: var(--text-muted);">0.40m</span>
+                  </div>
+                  <div style="position: absolute; left: 50%; height: 100%; width: 1px; background-color: var(--mil-border-light); pointer-events: none;">
+                    <span style="position: absolute; top: 2px; left: 3px; font-size: 8px; font-family: var(--font-mono); color: var(--text-muted);">0.87m (Mid)</span>
+                  </div>
+                  <div style="position: absolute; left: 74.7%; height: 100%; width: 1px; background-color: var(--mil-border-light); pointer-events: none;">
+                    <span style="position: absolute; top: 2px; left: 3px; font-size: 8px; font-family: var(--font-mono); color: var(--text-muted);">1.30m</span>
+                  </div>
+
+                  <!-- Guide Rail -->
+                  <div style="
+                    position: absolute;
+                    top: 18px;
+                    left: 6px;
+                    right: 6px;
+                    height: 4px;
+                    background-color: #353c34;
+                    pointer-events: none;
+                  "></div>
+
+                  <!-- Configured STOP POINT Marker / Boundary Flag -->
+                  <div id="stopPointMarker" class="stop-marker-transition" style="
+                    position: absolute;
+                    left: 86.2%;
+                    top: 0;
+                    bottom: 0;
+                    width: 2px;
+                    background-color: #8a2a2a;
+                    transform: translateX(-50%);
+                    z-index: 5;
+                    pointer-events: none;
+                  ">
+                    <div style="
+                      position: absolute;
+                      top: 1px;
+                      right: 4px;
+                      background-color: #8a2a2a;
+                      color: #ffffff;
+                      font-family: var(--font-mono);
+                      font-size: 8px;
+                      font-weight: 900;
+                      padding: 1px 3px;
+                      white-space: nowrap;
+                      border-radius: 2px;
+                      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                    ">
+                      STOP ▼
+                    </div>
+                  </div>
+
+                  <!-- Target Carriage Marker -->
+                  <div id="railCarriageMarker" class="carriage-marker" style="
+                    position: absolute;
+                    left: 0%;
+                    transform: translateX(-50%);
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    z-index: 10;
+                    pointer-events: none;
+                  ">
+                    <div style="
+                      width: 20px;
+                      height: 20px;
+                      background-color: var(--mil-hit);
+                      border: 2px solid #ffffff;
+                      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                    ">
+                      <div style="width: 5px; height: 5px; background-color: #ffffff;"></div>
+                    </div>
+                    <div id="carriageTag" style="
+                      font-size: 9px;
+                      font-family: var(--font-mono);
+                      font-weight: 900;
+                      color: #ffffff;
+                      background-color: var(--mil-dark);
+                      padding: 1px 4px;
+                      margin-top: 1px;
+                      white-space: nowrap;
+                    ">
+                      0.00m
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- CHOOSE TARGET STOP POINT CONTROLS -->
+              <div style="
+                background-color: var(--mil-card-bg);
+                border: 1px solid var(--mil-border-light);
+                padding: 6px 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+              ">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="font-size: 10px; font-family: var(--font-mono); font-weight: 900; color: #8a2a2a; text-transform: uppercase;">
+                      ★ CHOOSE STOP POINT:
+                    </span>
+                    <input id="inputStopPoint" type="number" step="0.05" min="0.05" max="1.74" value="1.50" onchange="onStopPointInputChange(this.value)" style="width: 62px; padding: 2px 4px; font-family: var(--font-mono); font-weight: 900; font-size: 11px; border: 1px solid var(--mil-border-light); text-align: center;" />
+                    <span style="font-size: 10px; font-family: var(--font-mono); font-weight: 700; color: var(--text-dark);">m</span>
+                    <span style="font-size: 9px; font-family: var(--font-mono); color: var(--text-muted); margin-left: 2px;">(<span id="stopPointCmText">150.0</span> cm | <span id="stopPointStepsText">5,000</span> steps)</span>
+                  </div>
+
+                  <div style="font-size: 9px; font-family: var(--font-mono); color: var(--text-muted);">
+                    Remaining: <b id="distanceRemainingLabel" style="color: var(--text-dark);">1.500 m</b>
+                  </div>
+                </div>
+
+                <!-- Slider & Quick Stop Point Presets -->
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <input id="sliderStopPoint" type="range" min="0.05" max="1.74" step="0.01" value="1.50" oninput="onStopPointSliderChange(this.value)" style="flex: 1; accent-color: #8a2a2a; cursor: pointer;" />
+
+                  <!-- Quick Stop Presets -->
+                  <div style="display: flex; gap: 3px;">
+                    <button onclick="setStopPoint(0.50)" class="ref-btn ref-btn-light" style="padding: 2px 5px; font-size: 9px;">0.5m</button>
+                    <button onclick="setStopPoint(1.00)" class="ref-btn ref-btn-light" style="padding: 2px 5px; font-size: 9px;">1.0m</button>
+                    <button onclick="setStopPoint(1.20)" class="ref-btn ref-btn-light" style="padding: 2px 5px; font-size: 9px;">1.2m</button>
+                    <button onclick="setStopPoint(1.50)" class="ref-btn ref-btn-light" style="padding: 2px 5px; font-size: 9px;">1.5m</button>
+                    <button onclick="setStopPoint(1.74)" class="ref-btn ref-btn-light" style="padding: 2px 5px; font-size: 9px; font-weight: 900; color: #8a2a2a;">1.74m</button>
+                    <button onclick="sendZeroCommand()" class="ref-btn" style="padding: 2px 5px; font-size: 9px; background-color: #736245;">ZERO</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom: Clean Recent Impact Stream -->
+        <div style="flex: 1 1 30%; min-height: 100px;">
+          <div class="ref-panel" style="
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 8px 10px;
+          ">
+            <div style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding-bottom: 4px;
+              border-bottom: 1px solid var(--mil-border-light);
+              margin-bottom: 4px;
+            ">
+              <div style="
+                font-family: var(--font-mono);
+                font-size: 10px;
+                font-weight: 800;
+                letter-spacing: 0.08em;
+                color: var(--text-dark);
+                text-transform: uppercase;
+              ">
+                RECENT IMPACT LOG
+              </div>
+              <span id="logCounter" style="font-size: 9px; color: var(--text-muted); font-family: var(--font-mono);">
+                0 OF 20 RECORDED
+              </span>
+            </div>
+
+            <div id="impactLogContainer" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;">
+              <div id="emptyLogNotice" style="
+                height: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: var(--text-muted);
+                font-family: var(--font-mono);
+                font-size: 10px;
+                font-style: italic;
+                text-align: center;
+                padding: 8px;
+              ">
+                NO SHOTS LOGGED // CLICK TARGET TO RECORD IMPACT
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Terminal Drawer Modal -->
+  <div id="terminalModal" style="
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 240px;
+    background-color: #171a16;
+    border-top: 2px solid #353c34;
+    padding: 12px 20px;
+    z-index: 100;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+    flex-direction: column;
+  ">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 800; color: #ffffff;">
+        ESP32 SERIAL COMMUNICATION LOG (115200 BAUD) — 1.74m RAIL
+      </span>
+      <div style="display: flex; gap: 6px;">
+        <button onclick="sendZeroCommand()" class="ref-btn" style="padding: 2px 8px; font-size: 10px;" title="Calibrate / Set current position as 0.00m Coordinate Origin">SET ZERO COORD</button>
+        <button onclick="sendRawCommand('STATUS')" class="ref-btn" style="padding: 2px 8px; font-size: 10px;">QUERY STATUS</button>
+        <button onclick="clearTerminal()" class="ref-btn" style="padding: 2px 8px; font-size: 10px;">CLEAR</button>
+        <button onclick="toggleTerminalModal()" class="ref-btn ref-btn-light" style="padding: 2px 8px; font-size: 10px;">CLOSE [X]</button>
+      </div>
+    </div>
+    <div id="terminalOutput" style="
+      flex: 1;
+      background-color: #0d0f0c;
+      border: 1px solid #282d26;
+      padding: 8px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #9fe29e;
+    "></div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // CALIBRATION & HARDWARE SETTINGS (GT2 30T PULLEY = 6.0 CM / REV)
+    // =========================================================================
+    const CM_PER_REV   = 6.0;               // 30 teeth × 2mm = 60mm = 6.0 cm per revolution
+    const STEPS_PER_CM = 200.0 / CM_PER_REV; // 33.3333 steps/cm (5,000 steps = 1.50m = 150 cm)
+    const MAX_METERS   = 1.74;              // 1.74 meters (174.0 cm) total rail length
+    const MIN_METERS   = 0.00;
+
+    let currentDistanceMeters = 0.0;
+    let chosenStopPointMeters = 1.50;    // User-selectable stop point (default 1.50m)
+    let currentStepCount      = 0;
+    let isMoving              = false;
+    let isEmergencyStop       = false;
+    let elevationState        = 'UP';
+    let exposureSeconds       = 5.0;
+    let exposureTimer         = null;
+
+    // Continuous Shuttle State
+    let isShuttleActive       = false;
+    let shuttleTargetMeters   = 1.50;
+    let shuttleDwellTimer     = null;
+
+    // Web Serial State
+    let port        = null;
+    let reader      = null;
+    let isConnected = false;
+
+    // Motor Speed Level (15% to 150%)
+    let motorSpeedPercent = 100;
+
+    // Session Shots
+    let shots = [];
+
+    // --- KEYBOARD CONTROLS (ARROWS, R, S, 0, SPACE, ESC, 1-4 SPEED) ---
+    window.addEventListener('keydown', (e) => {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
+
+      const key = e.key;
+
+      if (key === 'ArrowRight') {
+        e.preventDefault();
+        driveToStopPoint();
+      } else if (key === 'ArrowLeft') {
+        e.preventDefault();
+        driveToHome();
+      } else if (key === 'ArrowUp' || key === 'ArrowDown') {
+        e.preventDefault();
+        toggleContinuousShuttle();
+      } else if (key === ' ' || key.toUpperCase() === 'S') {
+        e.preventDefault();
+        toggleStartStop();
+      } else if (key.toUpperCase() === 'R') {
+        e.preventDefault();
+        driveToHome();
+      } else if (key === 'Escape') {
+        e.preventDefault();
+        handleEmergencyStop();
+      } else if (key === '0') {
+        e.preventDefault();
+        handlePopCommand();
+      } else if (key === '1') {
+        e.preventDefault();
+        setSpeed(30);
+      } else if (key === '2') {
+        e.preventDefault();
+        setSpeed(60);
+      } else if (key === '3') {
+        e.preventDefault();
+        setSpeed(100);
+      } else if (key === '4') {
+        e.preventDefault();
+        setSpeed(130);
+      } else if (key === '+' || key === '=') {
+        e.preventDefault();
+        setSpeed(motorSpeedPercent + 10);
+      } else if (key === '-' || key === '_') {
+        e.preventDefault();
+        setSpeed(motorSpeedPercent - 10);
+      }
+    });
+
+    // --- MOTOR SPEED CONTROLLER ---
+    function setSpeed(pct) {
+      motorSpeedPercent = Math.max(15, Math.min(150, parseInt(pct, 10)));
+      
+      const slider = document.getElementById("speedSlider");
+      if (slider) slider.value = motorSpeedPercent;
+      
+      const valLabel = document.getElementById("speedValueLabel");
+      if (valLabel) valLabel.innerText = `${motorSpeedPercent}%`;
+      
+      const metricLabel = document.getElementById("speedMetricLabel");
+      if (metricLabel) {
+        let cmPerSec = 24.4 * (motorSpeedPercent / 100.0);
+        metricLabel.innerText = `(~${cmPerSec.toFixed(1)} cm/s)`;
+      }
+
+      // Highlight active preset button if matched
+      document.querySelectorAll(".speed-preset-btn").forEach(btn => btn.classList.remove("ref-btn-accent"));
+      const activeBtn = document.getElementById(`btnSpeed${motorSpeedPercent}`);
+      if (activeBtn) activeBtn.classList.add("ref-btn-accent");
+
+      // Send SPEED command to hardware
+      sendRawCommand(`SPEED,${motorSpeedPercent}`);
+      logTerm(`[Speed] Commanded Motor Speed: ${motorSpeedPercent}% (~${(24.4 * motorSpeedPercent / 100).toFixed(1)} cm/s)`);
+    }
+
+    function onSpeedSliderChange(val) {
+      setSpeed(val);
+    }
+
+    // --- CONTINUOUS ARROW & SHUTTLE DRIVE ---
+    function driveToStopPoint() {
+      if (isEmergencyStop) return;
+      stopShuttleLoop();
+      let cm = chosenStopPointMeters * 100.0;
+      sendRawCommand(`TARGET,${cm.toFixed(1)}`);
+      logTerm(`[Arrow ►] Driving forward to Stop Point: ${chosenStopPointMeters.toFixed(2)}m (${cm.toFixed(1)} cm)`);
+    }
+
+    function driveToHome() {
+      if (isEmergencyStop) return;
+      stopShuttleLoop();
+      sendRawCommand("TARGET,0.0");
+      logTerm("[Origin ◄ / R] Returning carriage back to Origin: 0.00m (0.0 cm)");
+    }
+
+    function toggleContinuousShuttle() {
+      if (isEmergencyStop) return;
+      isShuttleActive = !isShuttleActive;
+
+      const btn = document.getElementById("btnAutoShuttle");
+      const text = document.getElementById("shuttleBtnText");
+
+      if (isShuttleActive) {
+        btn.classList.add("ref-btn-shuttle-active");
+        text.innerText = "SHUTTLE RUNNING [HALT]";
+        logTerm(`[Shuttle] Continuous Patrol Started between 0.00m and ${chosenStopPointMeters.toFixed(2)}m`);
+        runShuttleCycle();
+      } else {
+        stopShuttleLoop();
+      }
+    }
+
+    function stopShuttleLoop() {
+      if (!isShuttleActive) return;
+      isShuttleActive = false;
+      clearTimeout(shuttleDwellTimer);
+
+      const btn = document.getElementById("btnAutoShuttle");
+      const text = document.getElementById("shuttleBtnText");
+      btn.classList.remove("ref-btn-shuttle-active");
+      text.innerText = "AUTO SHUTTLE [↑/↓]";
+      logTerm("[Shuttle] Continuous Patrol Paused.");
+    }
+
+    function runShuttleCycle() {
+      if (!isShuttleActive || isEmergencyStop) return;
+
+      // Determine next shuttle destination
+      let atHome = currentDistanceMeters < 0.05;
+      let targetM = atHome ? chosenStopPointMeters : 0.00;
+
+      let cm = targetM * 100.0;
+      sendRawCommand(`TARGET,${cm.toFixed(1)}`);
+      logTerm(`[Shuttle Cycle] Heading to ${targetM.toFixed(2)}m...`);
+    }
+
+    function onArrivalAtTarget() {
+      if (isShuttleActive) {
+        // Arrived at one end of the shuttle run -> dwell 1 second then reverse
+        clearTimeout(shuttleDwellTimer);
+        shuttleDwellTimer = setTimeout(() => {
+          if (isShuttleActive) runShuttleCycle();
+        }, 1000);
+      }
+    }
+
+    // --- WEB SERIAL COMMUNICATION ---
+    async function toggleConnectSerial() {
+      if (isConnected) {
+        await disconnectSerial();
+      } else {
+        await connectSerial();
+      }
+    }
+
+    async function connectSerial() {
+      if (!("serial" in navigator)) {
+        alert("Web Serial API is not supported in this browser. Please open in Google Chrome or Microsoft Edge.");
+        return;
+      }
+
+      try {
+        logTerm("[Serial] Requesting ESP32 port...");
+        const paired = await navigator.serial.getPorts();
+        if (paired.length > 0 && !port) {
+          port = paired[0];
+        } else {
+          port = await navigator.serial.requestPort();
+        }
+
+        await port.open({ baudRate: 115200 });
+
+        try {
+          await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        } catch (e) {}
+
+        isConnected = true;
+        updateConnectionUI(true);
+        logTerm("[Serial] Connected to ESP32 at 115200 baud! (GT2 30T: 33.33 steps/cm)");
+
+        readSerialLoop();
+        setTimeout(() => sendRawCommand("STATUS"), 400);
+        setTimeout(() => sendRawCommand(`SPEED,${motorSpeedPercent}`), 550);
+
+      } catch (err) {
+        console.error("Connection error:", err);
+        let msg = err.message || err.toString();
+        if (msg.includes("Failed to open") || err.name === "NetworkError") {
+          logTerm("[ERROR] COM port locked! Ensure Arduino IDE Serial Monitor is CLOSED.");
+          alert("Connection Failed: The COM port is locked!\n\nPlease CLOSE the Arduino IDE Serial Monitor, then click Connect again.");
+        } else {
+          logTerm(`[Serial] Cancelled or failed: ${msg}`);
+        }
+        port = null;
+        isConnected = false;
+        updateConnectionUI(false);
+      }
+    }
+
+    async function disconnectSerial() {
+      isConnected = false;
+      stopShuttleLoop();
+      try {
+        if (reader) {
+          await reader.cancel();
+          reader.releaseLock();
+          reader = null;
+        }
+        if (port) {
+          await port.close();
+          port = null;
+        }
+      } catch (e) {}
+      updateConnectionUI(false);
+      logTerm("[Serial] Disconnected.");
+    }
+
+    function updateConnectionUI(connected) {
+      const dot  = document.getElementById("serialStatusDot");
+      const text = document.getElementById("serialStatusText");
+      const btn  = document.getElementById("btnConnectSerial");
+      const sub  = document.getElementById("subbarNotice");
+
+      if (connected) {
+        dot.style.backgroundColor = "#2cff55";
+        text.innerText = "ESP32 CONNECTED";
+        btn.style.backgroundColor = "#1b3a20";
+        sub.innerText = "HARDWARE LINKED // USE ARROW BUTTONS [←] [→] TO DRIVE CARRIAGE";
+      } else {
+        dot.style.backgroundColor = "#ffcc00";
+        text.innerText = "CONNECT ESP32";
+        btn.style.backgroundColor = "#2c5934";
+        sub.innerText = "USE KEYBOARD ARROWS [←] [→] TO RUN CARRIAGE CONTINUOUSLY";
+      }
+    }
+
+    async function readSerialLoop() {
+      let buffer = "";
+      const decoder = new TextDecoder();
+
+      try {
+        reader = port.readable.getReader();
+        while (isConnected && port && port.readable) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            let lines = buffer.split("\n");
+            buffer = lines.pop();
+
+            for (let line of lines) {
+              handleIncomingSerial(line.trim());
+            }
+          }
+        }
+      } catch (err) {
+        if (isConnected) logTerm(`[Serial Error] ${err.message}`);
+      } finally {
+        if (reader) {
+          try { reader.releaseLock(); } catch(e){}
+          reader = null;
+        }
+      }
+    }
+
+    function handleIncomingSerial(line) {
+      if (!line) return;
+      logTerm(`◄ ${line}`);
+
+      // Distance matching from ESP32: "Distance from Zero: 150.00 cm" or "Position: 150.00 cm"
+      let posMatch = line.match(/(?:Distance from Zero:\s*|Position:\s*|Current position:\s*)([0-9.]+)\s*cm/i);
+      if (posMatch) {
+        let cm = parseFloat(posMatch[1]);
+        updateCarriagePosition(cm / 100.0);
+        setMotionState(false);
+      }
+
+      // Step count matching: "(5000 steps)"
+      let stepsMatch = line.match(/\(([0-9]+)\s*steps\)/i);
+      if (stepsMatch) {
+        currentStepCount = parseInt(stepsMatch[1], 10);
+        document.getElementById("displayStepCount").innerText = currentStepCount.toLocaleString();
+      }
+
+      // Moving announcement: "Moving from 0.00 cm -> 150.00 cm"
+      if (line.includes("Moving from")) {
+        setMotionState(true);
+      }
+
+      if (line.includes("Movement complete") || line.includes("Already at target")) {
+        setMotionState(false);
+        onArrivalAtTarget();
+      }
+    }
+
+    async function sendRawCommand(cmd) {
+      logTerm(`► ${cmd}`);
+
+      if (isConnected && port && port.writable) {
+        try {
+          const encoder = new TextEncoder();
+          const writer = port.writable.getWriter();
+          await writer.write(encoder.encode(cmd + "\n"));
+          writer.releaseLock();
+        } catch (e) {
+          logTerm(`[Write Error] ${e.message}`);
+        }
+      } else {
+        // Simulation engine for instant visual testing without hardware
+        simulateHardwareResponse(cmd);
+      }
+    }
+
+    // --- SIMULATION ENGINE ---
+    function simulateHardwareResponse(cmd) {
+      if (cmd.startsWith("TARGET,")) {
+        let cm = parseFloat(cmd.substring(7));
+        simulateMoveTo(cm / 100.0);
+      } else if (cmd === "ZERO") {
+        updateCarriagePosition(0.0);
+        logTerm("◄ Position reset to 0.00 cm (0 steps)");
+      } else if (cmd === "STATUS") {
+        let cm = currentDistanceMeters * 100.0;
+        logTerm(`◄ Distance from Zero: ${cm.toFixed(2)} cm (${Math.round(cm * STEPS_PER_CM)} steps) | Rail Max: 174.0 cm`);
+      } else if (cmd === "STOP") {
+        setMotionState(false);
+        logTerm("◄ [ALERT] Motion halted.");
+      }
+    }
+
+    function simulateMoveTo(targetM) {
+      targetM = Math.max(MIN_METERS, Math.min(MAX_METERS, targetM));
+      let startM = currentDistanceMeters;
+      let distM = Math.abs(targetM - startM);
+      if (distM === 0) {
+        onArrivalAtTarget();
+        return;
+      }
+
+      setMotionState(true);
+      let durationMs = Math.min(3500, Math.max(200, distM * (1040.0 * 100.0 / motorSpeedPercent)));
+      let startTime = performance.now();
+
+      function anim(now) {
+        let elapsed = now - startTime;
+        let p = Math.min(1.0, elapsed / durationMs);
+        let m = startM + (targetM - startM) * p;
+        updateCarriagePosition(m);
+
+        if (p < 1.0 && isMoving) {
+          requestAnimationFrame(anim);
+        } else {
+          setMotionState(false);
+          logTerm(`◄ Movement complete. Target arrived at ${(targetM * 100).toFixed(2)} cm`);
+          onArrivalAtTarget();
+        }
+      }
+      requestAnimationFrame(anim);
+    }
+
+    // --- STOP POINT FEATURE CONTROLS ---
+    function setStopPoint(meters) {
+      chosenStopPointMeters = Math.max(MIN_METERS, Math.min(MAX_METERS, Number(meters)));
+      let cm = chosenStopPointMeters * 100.0;
+      let steps = Math.round(cm * STEPS_PER_CM);
+
+      document.getElementById("inputStopPoint").value       = chosenStopPointMeters.toFixed(2);
+      document.getElementById("sliderStopPoint").value      = chosenStopPointMeters.toFixed(2);
+      document.getElementById("stopPointCmText").innerText   = cm.toFixed(1);
+      document.getElementById("stopPointStepsText").innerText = steps.toLocaleString();
+      document.getElementById("railStopPointLabel").innerText = `${chosenStopPointMeters.toFixed(2)}m`;
+      if (!isMoving && document.getElementById("tileStartStopSub")) {
+        let atStop = Math.abs(currentDistanceMeters - chosenStopPointMeters) < 0.01;
+        let nextLabel = atStop ? "RETURN TO 0.0m" : `TO STOP POINT (${chosenStopPointMeters.toFixed(2)}m)`;
+        document.getElementById("tileStartStopSub").innerText = `${nextLabel} [S]`;
+      }
+
+      // Position red dashed stop line on 1.74m rail
+      let pct = (chosenStopPointMeters / MAX_METERS) * 100;
+      document.getElementById("stopPointMarker").style.left = `${pct}%`;
+
+      updateDistanceRemaining();
+    }
+
+    function onStopPointInputChange(val) {
+      setStopPoint(parseFloat(val) || 1.50);
+    }
+
+    function onStopPointSliderChange(val) {
+      setStopPoint(parseFloat(val));
+    }
+
+    // Click anywhere on rail track to place the Stop Point!
+    function handleRailTrackClick(e) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1.0, clickX / rect.width));
+      const targetM = ratio * MAX_METERS;
+      setStopPoint(Math.round(targetM * 100) / 100);
+      logTerm(`[Config] Target Stop Point set to ${chosenStopPointMeters.toFixed(2)}m (${(chosenStopPointMeters*100).toFixed(1)} cm)`);
+    }
+
+    function updateDistanceRemaining() {
+      let delta = Math.abs(chosenStopPointMeters - currentDistanceMeters);
+      document.getElementById("distanceRemainingLabel").innerText = `${delta.toFixed(3)} m`;
+    }
+
+    // --- CARRIAGE POSITION & MOTION UPDATE ---
+    function updateCarriagePosition(meters) {
+      currentDistanceMeters = Math.max(MIN_METERS, Math.min(MAX_METERS, meters));
+      let cm = currentDistanceMeters * 100.0;
+      currentStepCount = Math.round(cm * STEPS_PER_CM);
+
+      document.getElementById("displayDistanceMeters").innerText = currentDistanceMeters.toFixed(3);
+      document.getElementById("displayDistanceCm").innerText     = cm.toFixed(1);
+      document.getElementById("displayStepCount").innerText      = currentStepCount.toLocaleString();
+
+      let pct = (currentDistanceMeters / MAX_METERS) * 100;
+      document.getElementById("railCarriageMarker").style.left   = `${pct}%`;
+      document.getElementById("carriageTag").innerText           = `${currentDistanceMeters.toFixed(2)}m`;
+
+      updateDistanceRemaining();
+    }
+
+    function setMotionState(moving) {
+      isMoving = moving;
+      const statusBadge = document.getElementById("displayCarriageStatus");
+      const tileStartStop = document.getElementById("tileStartStop");
+      const tileTitle = document.getElementById("tileStartStopTitle");
+      const tileSub = document.getElementById("tileStartStopSub");
+      const headerStatus = document.getElementById("headerSysStatus");
+
+      if (moving) {
+        let dirLabel = (chosenStopPointMeters >= currentDistanceMeters) ? "MOVING AWAY ▲" : "RETURNING ▼";
+        statusBadge.innerText = `${dirLabel} // ${elevationState}`;
+        headerStatus.innerText = "SYS: MOVING";
+        headerStatus.style.backgroundColor = "#283a2a";
+
+        if (tileStartStop) {
+          tileStartStop.classList.remove("active-run");
+          tileStartStop.classList.add("active-stop");
+          tileTitle.innerText = "STOP TARGET";
+          tileSub.innerText = "HALT MOTION [S]";
+        }
+      } else {
+        let atStop = Math.abs(currentDistanceMeters - chosenStopPointMeters) < 0.01;
+        statusBadge.innerText = atStop ? `AT STOP POINT (${chosenStopPointMeters.toFixed(2)}m)` : `STOPPED // ${elevationState}`;
+        headerStatus.innerText = isEmergencyStop ? "SYS: ESTOP" : (isShuttleActive ? "SYS: SHUTTLE" : "SYS: READY");
+        headerStatus.style.backgroundColor = isEmergencyStop ? "var(--mil-miss)" : (isShuttleActive ? "#283a2a" : "#353c34");
+
+        if (tileStartStop) {
+          tileStartStop.classList.remove("active-stop");
+          tileStartStop.classList.add("active-run");
+          tileTitle.innerText = "START TARGET";
+          let nextTargetLabel = atStop ? "RETURN TO 0.0m" : `TO STOP POINT (${chosenStopPointMeters.toFixed(2)}m)`;
+          tileSub.innerText = `${nextTargetLabel} [S]`;
+        }
+      }
+    }
+
+    // --- COMMAND ACTIONS (START/STOP TOGGLE & RESET) ---
+    function toggleStartStop() {
+      if (isEmergencyStop) return;
+      if (isMoving || isShuttleActive) {
+        handleStopCommand();
+      } else {
+        handleRunCommand();
+      }
+    }
+
+    function handleRunCommand() {
+      if (isEmergencyStop) return;
+      let atStop = Math.abs(currentDistanceMeters - chosenStopPointMeters) < 0.01;
+      let targetM = atStop ? 0.00 : chosenStopPointMeters;
+      let cm = targetM * 100.0;
+      sendRawCommand(`TARGET,${cm.toFixed(1)}`);
+      logTerm(`[Command] Driving carriage to ${targetM.toFixed(2)}m (${cm.toFixed(1)} cm)`);
+    }
+
+    function handleStopCommand() {
+      stopShuttleLoop();
+      sendRawCommand("STOP");
+      setMotionState(false);
+    }
+
+    function handlePopCommand() {
+      if (isEmergencyStop) return;
+      exposureSeconds = 5.0;
+      elevationState = 'UP';
+      document.getElementById("targetElevationBadge").innerText = "EXPOSED [5.0s]";
+      document.getElementById("targetElevationBadge").style.backgroundColor = "var(--mil-hit)";
+      document.getElementById("tilePop").classList.add("active-pop");
+      document.getElementById("tilePopTitle").innerText = "EXPOSED (5s)";
+      document.getElementById("targetFace").style.transform = "none";
+      document.getElementById("targetFace").style.opacity = "1.0";
+
+      clearInterval(exposureTimer);
+      exposureTimer = setInterval(() => {
+        exposureSeconds -= 0.1;
+        if (exposureSeconds <= 0) {
+          clearInterval(exposureTimer);
+          foldTarget();
+        } else {
+          document.getElementById("exposureTimerLabel").innerText = `${exposureSeconds.toFixed(1)}s REMAINING`;
+          document.getElementById("exposureProgressBar").style.width = `${(exposureSeconds / 5.0) * 100}%`;
+        }
+      }, 100);
+    }
+
+    function foldTarget() {
+      elevationState = 'DOWN';
+      document.getElementById("targetElevationBadge").innerText = "CONCEALED [DOWN]";
+      document.getElementById("targetElevationBadge").style.backgroundColor = "var(--mil-dark)";
+      document.getElementById("tilePop").classList.remove("active-pop");
+      document.getElementById("tilePopTitle").innerText = "POP TARGET (5s)";
+      document.getElementById("tilePopSub").innerText = "SERVO FOLDED";
+      document.getElementById("exposureTimerLabel").innerText = "CONCEALED";
+      document.getElementById("exposureProgressBar").style.width = "0%";
+      document.getElementById("targetFace").style.transform = "rotateX(60deg) scale(0.92) translateY(24px)";
+      document.getElementById("targetFace").style.opacity = "0.4";
+    }
+
+    function handleEmergencyStop() {
+      stopShuttleLoop();
+      isEmergencyStop = !isEmergencyStop;
+      sendRawCommand("STOP");
+      setMotionState(false);
+
+      const btnEstop = document.getElementById("btnEstop");
+      if (isEmergencyStop) {
+        btnEstop.style.backgroundColor = "var(--mil-miss)";
+        document.getElementById("headerSysStatus").innerText = "ESTOP ACTIVE";
+        document.getElementById("headerSysStatus").style.backgroundColor = "var(--mil-miss)";
+        logTerm("[ESTOP] EMERGENCY STOP ACTIVE! CARRIAGE HALTED.");
+      } else {
+        btnEstop.style.backgroundColor = "#2e342d";
+        document.getElementById("headerSysStatus").innerText = "SYS: READY";
+        document.getElementById("headerSysStatus").style.backgroundColor = "#353c34";
+        logTerm("[ESTOP] Emergency Stop cleared.");
+      }
+    }
+
+    function sendZeroCommand() {
+      if (confirm("Reset current position as 0.00 cm Reference Origin?")) {
+        sendRawCommand("ZERO");
+        updateCarriagePosition(0.0);
+      }
+    }
+
+    // --- TARGET IMPACT SIMULATION ---
+    function handleTargetClick(e) {
+      if (isEmergencyStop || elevationState === 'DOWN') return;
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      const scale = 150.0 / rect.width;
+      const xMm = clickX * scale;
+      const yMm = clickY * scale;
+
+      // Optimal hit zone is [50, 50] to [100, 100]
+      const isHit = (xMm >= 50 && xMm <= 100 && yMm >= 50 && yMm <= 100);
+      const result = isHit ? "HIT" : "MISS";
+
+      const distMm = Math.hypot(xMm - 75, yMm - 75);
+
+      // Render dot on target
+      const dot = document.createElement("div");
+      dot.style.position = "absolute";
+      dot.style.left = `${(xMm / 150) * 100}%`;
+      dot.style.top = `${(yMm / 150) * 100}%`;
+      dot.style.width = "9px";
+      dot.style.height = "9px";
+      dot.style.transform = "translate(-50%, -50%)";
+      dot.style.borderRadius = "50%";
+      dot.style.backgroundColor = isHit ? "var(--mil-hit)" : "var(--mil-miss)";
+      dot.style.border = "1.5px solid #ffffff";
+      dot.style.boxShadow = "0 0 8px rgba(0,0,0,0.5)";
+      dot.style.pointerEvents = "none";
+      document.getElementById("impactDotsContainer").appendChild(dot);
+
+      // Verdict label
+      document.getElementById("verdictLabel").innerText = `${result} // ${distMm.toFixed(1)}mm FROM CENTER`;
+      const vBadge = document.getElementById("verdictBadge");
+      vBadge.innerText = result;
+      vBadge.style.backgroundColor = isHit ? "var(--mil-hit)" : "var(--mil-miss)";
+      vBadge.style.color = "#ffffff";
+
+      // Add shot record
+      recordShot(result, distMm);
+    }
+
+    function recordShot(result, distMm) {
+      let shotNum = shots.length + 1;
+      let now = new Date();
+      let timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+
+      shots.push({ num: shotNum, result, distMm, time: timeStr, posM: currentDistanceMeters });
+
+      // Update HUD
+      let hits = shots.filter(s => s.result === "HIT").length;
+      let misses = shots.filter(s => s.result === "MISS").length;
+      let acc = (hits / shots.length) * 100;
+
+      document.getElementById("hudShotNum").innerText = String(shots.length).padStart(2, '0');
+      document.getElementById("hudRemaining").innerText = Math.max(0, 20 - shots.length);
+      document.getElementById("hudHits").innerText = hits;
+      document.getElementById("hudMisses").innerText = misses;
+      document.getElementById("hudAccuracy").innerText = `${acc.toFixed(1)}%`;
+      document.getElementById("logCounter").innerText = `${shots.length} OF 20 RECORDED`;
+
+      // Prepend to impact log
+      document.getElementById("emptyLogNotice").style.display = "none";
+      const logBox = document.getElementById("impactLogContainer");
+      const row = document.createElement("div");
+      row.style.cssText = "display: flex; align-items: center; justify-content: space-between; padding: 3px 8px; background-color: #ffffff; border: 1px solid var(--mil-border-light); font-family: var(--font-mono); font-size: 10px;";
+      row.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-weight: 800; color: var(--text-dark);">#${String(shotNum).padStart(2, '0')}</span>
+          <span style="font-weight: 900; padding: 1px 5px; background-color: ${result === 'HIT' ? 'var(--mil-hit)' : 'var(--mil-miss)'}; color: #ffffff; font-size: 8px;">${result}</span>
+          <span style="font-weight: 700; color: var(--text-dark);">${currentDistanceMeters.toFixed(3)} m</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="color: var(--text-muted); font-size: 9px;">${distMm.toFixed(1)} mm off-center</span>
+          <span style="color: var(--text-muted); font-size: 8px;">${timeStr}</span>
+        </div>
+      `;
+      logBox.insertBefore(row, logBox.firstChild);
+    }
+
+    function resetSession() {
+      shots = [];
+      document.getElementById("impactDotsContainer").innerHTML = "";
+      document.getElementById("impactLogContainer").innerHTML = `<div id="emptyLogNotice" style="height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; font-style: italic; text-align: center; padding: 8px;">NO SHOTS LOGGED // CLICK TARGET TO RECORD IMPACT</div>`;
+      document.getElementById("hudShotNum").innerText = "00";
+      document.getElementById("hudRemaining").innerText = "20";
+      document.getElementById("hudHits").innerText = "0";
+      document.getElementById("hudMisses").innerText = "0";
+      document.getElementById("hudAccuracy").innerText = "0.0%";
+      document.getElementById("logCounter").innerText = "0 OF 20 RECORDED";
+      document.getElementById("verdictLabel").innerText = "STANDBY // CLICK TARGET";
+      document.getElementById("verdictBadge").innerText = "READY";
+      document.getElementById("verdictBadge").style.backgroundColor = "var(--mil-canvas-tint)";
+      document.getElementById("verdictBadge").style.color = "var(--text-dark)";
+    }
+
+    // --- TERMINAL LOGGING ---
+    function logTerm(msg) {
+      const out = document.getElementById("terminalOutput");
+      const line = document.createElement("div");
+      line.innerText = msg;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function clearTerminal() {
+      document.getElementById("terminalOutput").innerHTML = "";
+    }
+
+    function toggleTerminalModal() {
+      const modal = document.getElementById("terminalModal");
+      modal.style.display = (modal.style.display === "flex") ? "none" : "flex";
+    }
+
+    // Initialize initial state
+    updateCarriagePosition(0.0);
+    setStopPoint(1.50);
+    logTerm("[System] SNYPTR 1.74-Metre Rail Dashboard initialized.");
+    logTerm("[System] Calibrated to GT2 30T Pulley: 6.0 cm / rev -> 33.33 steps/cm (5,000 steps = 1.50m).");
+    logTerm("[System] Controls: [S/Space] Start/Stop | [R / ◄] Return to Origin (0.0m) | [►] Stop Point | [▲/▼] Shuttle.");
+  </script>
+</body>
+</html>

@@ -1,0 +1,175 @@
+:root {
+  /* AUTHENTIC MILITARY PALETTE (MATCHING REFERENCE IMAGE) */
+  --mil-canvas: #ded8ce;           /* Warm stone / light sand canvas */
+  --mil-canvas-tint: #e8e4dc;      /* Lighter warm stone */
+  --mil-card-bg: #f5f2ec;          /* Sand-white card surface */
+  --mil-white: #ffffff;            /* Pure white target / inset */
+  
+  --mil-dark: #242923;             /* Deep tactical olive-slate */
+  --mil-dark-card: #2f352e;        /* Dark tile background */
+  --mil-dark-border: #1a1e19;      /* Strong dark border */
+  --mil-border-light: #c8c2b5;     /* Subtle stone border */
+  
+  --text-dark: #1b1f1a;            /* Primary dark text */
+  --text-muted: #5e665c;           /* Muted text */
+  --text-light: #f5f5f3;           /* White text on dark elements */
+  --text-sand: #d6cfc3;            /* Sand accent text */
+  
+  --mil-hit: #2c5934;              /* Deep military green for hit */
+  --mil-miss: #8a2a2a;             /* Deep brick red for miss */
+  
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: var(--mil-canvas);
+  color: var(--text-dark);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  user-select: none;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--mil-canvas-tint);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--mil-border-light);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--mil-dark);
+}
+
+/* REFERENCE-INSPIRED CARD PANELS */
+.ref-panel {
+  background-color: var(--mil-card-bg);
+  border: 1px solid var(--mil-border-light);
+  box-shadow: 0 2px 6px rgba(36, 41, 35, 0.08);
+}
+
+/* ============================================================
+   3 HERO COMMAND TILES (MATCHING REFERENCE'S 3 WIDE TILES)
+============================================================ */
+.ref-cmd-tile {
+  background: var(--mil-dark-card);
+  border: 2px solid var(--mil-dark-border);
+  color: var(--text-light);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.12s ease;
+  text-transform: uppercase;
+  position: relative;
+  min-height: 80px;
+}
+
+.ref-cmd-tile:hover:not(:disabled) {
+  background: #3a4239;
+  border-color: #525c50;
+  transform: translateY(-1px);
+}
+
+.ref-cmd-tile:active:not(:disabled) {
+  background: #1c201b;
+  transform: translateY(1px);
+}
+
+.ref-cmd-tile:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ref-cmd-tile.active-run {
+  background: #283a2a;
+  border-color: #4a754e;
+  box-shadow: 0 0 14px rgba(74, 117, 78, 0.35);
+}
+
+.ref-cmd-tile.active-stop {
+  background: #3a3328;
+  border-color: #736245;
+}
+
+.ref-cmd-tile.active-pop {
+  background: #333d36;
+  border-color: #617869;
+}
+
+.ref-tile-key {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 900;
+  color: #ffffff;
+  margin-bottom: 4px;
+  letter-spacing: 0.05em;
+}
+
+.ref-tile-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.ref-tile-sub {
+  font-size: 10px;
+  color: var(--text-sand);
+  font-family: var(--font-mono);
+  margin-top: 3px;
+}
+
+/* Reference-inspired buttons */
+.ref-btn {
+  background: var(--mil-dark);
+  color: #ffffff;
+  border: 1px solid var(--mil-dark-border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 6px 14px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: background 0.1s ease;
+}
+
+.ref-btn:hover:not(:disabled) {
+  background: #384037;
+}
+
+.ref-btn-light {
+  background: #ffffff;
+  color: var(--text-dark);
+  border: 1px solid var(--mil-border-light);
+}
+.ref-btn-light:hover:not(:disabled) {
+  background: var(--mil-canvas-tint);
+}
