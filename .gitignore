@@ -6,3 +6,4 @@ __pycache__/
 node_modules/
 live_frame_check.png
 com17_captured_frame.jpg
+.vscode/

@@ -98,10 +98,10 @@ MIN_ASPECT_RATIO = 0.30
 MAX_ASPECT_RATIO = 3.20
 
 # Temporal Tracking Parameters
-STABILITY_REQUIRED_FRAMES = 3  # Must remain in position for 3 consecutive frames (~250ms)
-MAX_STATIONARY_DRIFT_PX = 18.0 # Drift allowed between consecutive frames to consider "stuck"
-POST_HIT_COOLDOWN_SEC = 3.0    # Hold hit state for 3 seconds before auto-rearm
-POP_UP_SETTLE_WINDOW_SEC = 1.0 # Ignore visual transients during initial servo swing
+STABILITY_REQUIRED_FRAMES = 2  # Must remain in position for 2 consecutive frames (~120ms)
+MAX_STATIONARY_DRIFT_PX = 24.0 # Drift allowed between consecutive frames to consider "stuck"
+POST_HIT_COOLDOWN_SEC = 2.5    # Hold hit state for 2.5 seconds so dashboard polls it reliably
+POP_UP_SETTLE_WINDOW_SEC = 0.75 # Ignore visual transients during initial servo swing
 
 # =============================================================================
 # GLOBAL SHARED STATE
@@ -131,6 +131,8 @@ class VisionState:
         
         # Tracking history: list of (x, y, timestamp, area)
         self.recent_bullet_positions: List[Tuple[float, float, float, int]] = []
+        self.pre_pop_dart_pos: Optional[Tuple[float, float, int]] = None
+        self.awaiting_clear: bool = False
         
         # Calibrated Target Region (Center, Radius)
         self.target_center_px = (400, 400)
@@ -357,7 +359,7 @@ def segment_yellow_nerf_bullet(frame_bgr: np.ndarray, roi_mask: np.ndarray) -> T
     candidates = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 2200 or area > 42000:
+        if area < 1250 or area > 42000:
             continue
 
         x, y, w, h_box = cv2.boundingRect(cnt)
@@ -368,13 +370,14 @@ def segment_yellow_nerf_bullet(frame_bgr: np.ndarray, roi_mask: np.ndarray) -> T
         hull = cv2.convexHull(cnt)
         hull_area = cv2.contourArea(hull)
         solidity = float(area) / hull_area if hull_area > 0 else 0.0
-        if solidity < 0.50:
+        if solidity < 0.48:
             continue
 
-        # Must contain BOTH Lemon-Yellow Foam body (>= 1200 px) AND Vivid-Orange Tip (>= 700 px)
+        # Must contain Lemon-Yellow Foam body (>= 550 px; empty target is <= 144 px)
+        # AND either Vivid-Orange Tip (>= 480 px) OR strong Lemon-Yellow Body (>= 1200 px if tip is angled)
         y_px = int(np.count_nonzero(lemon_yellow[y:y+h_box, x:x+w]))
         o_px = int(np.count_nonzero(vivid_orange[y:y+h_box, x:x+w]))
-        if y_px < 1200 or o_px < 700:
+        if y_px < 550 or (o_px < 480 and y_px < 1200):
             continue
 
         M = cv2.moments(cnt)
@@ -423,9 +426,9 @@ def process_incoming_frame(frame: np.ndarray, frame_id: int):
         # Check cooldown timer
         if g_state.hit_active and (now - g_state.hit_timestamp > POST_HIT_COOLDOWN_SEC):
             g_state.hit_active = False
-            g_state.target_state = "ARMED"
+            g_state.target_state = "DOWN"
             g_state.recent_bullet_positions.clear()
-            print(f"[METRIC] 3.0s Post-hit cooldown elapsed. Re-arming for next shot.", flush=True)
+            print(f"[METRIC] 2.5s Post-hit cooldown elapsed. Ready for next pop.", flush=True)
 
     # Segment Yellow Nerf Bullet Candidates
     clean_mask, candidates = segment_yellow_nerf_bullet(frame, roi_mask)
@@ -439,47 +442,64 @@ def process_incoming_frame(frame: np.ndarray, frame_id: int):
     cv2.circle(annotated, (tc_x, tc_y), tr, (44, 255, 85), 2)
     cv2.circle(annotated, (tc_x, tc_y), 5, (44, 255, 85), -1)
     
-    # Ignore initial servo swing transients during first 1.0s of pop up
+    # Ignore initial servo swing transients during first 0.75s of pop up
     is_settling = (now - g_state.target_up_timestamp) < POP_UP_SETTLE_WINDOW_SEC
+    if is_settling and candidates:
+        candidates.sort(key=lambda c: c["area"], reverse=True)
+        p0 = candidates[0]
+        with g_state.lock:
+            g_state.pre_pop_dart_pos = (p0["centroid"][0], p0["centroid"][1], p0["area"])
     
-    if candidates and not is_settling and not g_state.hit_active:
+    if candidates and not is_settling and not g_state.hit_active and not g_state.awaiting_clear:
         # Choose candidate with largest verified mass
         candidates.sort(key=lambda c: c["area"], reverse=True)
         primary = candidates[0]
         cx, cy = primary["centroid"]
-        
-        # Temporal Persistence Check: Must be stationary across N consecutive frames
-        g_state.recent_bullet_positions.append((cx, cy, now, primary["area"]))
-        if len(g_state.recent_bullet_positions) > STABILITY_REQUIRED_FRAMES:
-            g_state.recent_bullet_positions.pop(0)
-            
-        if len(g_state.recent_bullet_positions) >= STABILITY_REQUIRED_FRAMES:
-            # Check maximum drift between observations
-            pts = [(p[0], p[1]) for p in g_state.recent_bullet_positions]
-            max_drift = max(np.hypot(pts[i][0] - pts[0][0], pts[i][1] - pts[0][1]) for i in range(len(pts)))
-            
-            if max_drift <= MAX_STATIONARY_DRIFT_PX:
-                # BULLET STUCK VERIFIED!
-                with g_state.lock:
-                    g_state.hit_active = True
-                    g_state.hit_timestamp = now
-                    g_state.hit_x_px = cx
-                    g_state.hit_y_px = cy
-                    g_state.hit_x_norm = cx / float(w_img)
-                    g_state.hit_y_norm = cy / float(h_img)
-                    g_state.hit_bullet_area = primary["area"]
-                    g_state.hit_confidence = primary["confidence"]
-                    g_state.target_state = "HIT"
-                    
-                print(f"\n[METRIC ANALYSIS] >>> GENUINE YELLOW NERF BULLET STUCK ON BLACK TARGET! <<<", flush=True)
-                print(f"       Coordinates : ({cx:.1f}px, {cy:.1f}px)", flush=True)
-                print(f"       Bullet Area : {primary['area']} px (Yellow={primary['yellow_px']}px, OrangeTip={primary['orange_px']}px)", flush=True)
-                print(f"       Confidence  : {primary['confidence']}%\n", flush=True)
+
+        # Check if this candidate is merely an unremoved dart that was already present during pop-up settle
+        is_old_dart = False
+        if g_state.pre_pop_dart_pos is not None:
+            px0, py0, p_area0 = g_state.pre_pop_dart_pos
+            if np.hypot(cx - px0, cy - py0) <= 28.0 and primary["area"] <= (p_area0 + 1200):
+                is_old_dart = True
+
+        if not is_old_dart:
+            # Temporal Persistence Check: Must be stationary across N consecutive frames
+            g_state.recent_bullet_positions.append((cx, cy, now, primary["area"]))
+            if len(g_state.recent_bullet_positions) > STABILITY_REQUIRED_FRAMES:
+                g_state.recent_bullet_positions.pop(0)
                 
-                # EXECUTE IMMEDIATE PHYSICAL DROP ACTION VIA WI-FI TO POP-UP ESP32
-                g_pop_ctrl.drop_target(1)
+            if len(g_state.recent_bullet_positions) >= STABILITY_REQUIRED_FRAMES:
+                # Check maximum drift between observations
+                pts = [(p[0], p[1]) for p in g_state.recent_bullet_positions]
+                max_drift = max(np.hypot(pts[i][0] - pts[0][0], pts[i][1] - pts[0][1]) for i in range(len(pts)))
+                
+                if max_drift <= MAX_STATIONARY_DRIFT_PX:
+                    # BULLET STUCK VERIFIED!
+                    with g_state.lock:
+                        g_state.hit_active = True
+                        g_state.awaiting_clear = True
+                        g_state.hit_timestamp = now
+                        g_state.hit_x_px = cx
+                        g_state.hit_y_px = cy
+                        g_state.hit_x_norm = cx / float(w_img)
+                        g_state.hit_y_norm = cy / float(h_img)
+                        g_state.hit_bullet_area = primary["area"]
+                        g_state.hit_confidence = primary["confidence"]
+                        g_state.target_state = "HIT"
+                        
+                    print(f"\n[METRIC ANALYSIS] >>> GENUINE YELLOW NERF BULLET STUCK ON BLACK TARGET! <<<", flush=True)
+                    print(f"       Coordinates : ({cx:.1f}px, {cy:.1f}px)", flush=True)
+                    print(f"       Bullet Area : {primary['area']} px (Yellow={primary['yellow_px']}px, OrangeTip={primary['orange_px']}px)", flush=True)
+                    print(f"       Confidence  : {primary['confidence']}%\n", flush=True)
+                    
+                    # EXECUTE IMMEDIATE PHYSICAL DROP ACTION VIA WI-FI TO POP-UP ESP32
+                    g_pop_ctrl.drop_target(1)
     elif not candidates and not g_state.hit_active:
-        g_state.recent_bullet_positions.clear()
+        with g_state.lock:
+            g_state.recent_bullet_positions.clear()
+            g_state.pre_pop_dart_pos = None
+            g_state.awaiting_clear = False
         
     # Draw annotations on HUD
     for cand in candidates:
@@ -550,6 +570,7 @@ if HAS_FASTAPI:
         with g_state.lock:
             return {
                 "hit": g_state.hit_active,
+                "hit_timestamp": round(g_state.hit_timestamp, 3),
                 "x_px": round(g_state.hit_x_px, 1),
                 "y_px": round(g_state.hit_y_px, 1),
                 "x_norm": round(g_state.hit_x_norm, 3),
@@ -571,6 +592,8 @@ if HAS_FASTAPI:
             g_state.target_state = "UP_ARMED"
             g_state.target_up_timestamp = time.time()
             g_state.hit_active = False
+            g_state.awaiting_clear = False
+            g_state.pre_pop_dart_pos = None
             g_state.recent_bullet_positions.clear()
         g_pop_ctrl.raise_target(1)
         return {"status": "ARMED", "timestamp": time.time()}
@@ -581,6 +604,7 @@ if HAS_FASTAPI:
         with g_state.lock:
             g_state.target_state = "DOWN"
             g_state.hit_active = False
+            g_state.awaiting_clear = True
             g_state.recent_bullet_positions.clear()
         g_pop_ctrl.drop_target(1)
         return {"status": "DOWN", "timestamp": time.time()}

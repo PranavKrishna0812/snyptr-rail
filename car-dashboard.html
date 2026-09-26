@@ -1047,10 +1047,14 @@
     let driveAnimationId = null;
 
     // Target Elevation & Shooting
-    let elevationState = 'UP';
+    let elevationState = 'DOWN';
     let exposureSeconds = 5.0;
     let exposureTimer = null;
     let shots = [];
+    window.totalHitsCount = 0;
+    window.totalMissesCount = 0;
+    window.lastPopUpTimeMs = 0;
+    window.ignoredWifiStaticPos = null;
 
     // Web Serial State
     let port = null;
@@ -1419,32 +1423,19 @@
     }
 
     function raiseTarget(id) {
-      targetServoStates[id] = true;
-      elevationState = 'UP';
-      sendRawCommand(`UP,${id}`);
-      logTerm(`[Servo Pop] Raising Target ${id} (UP,${id})...`);
-      updateServoButtonUI(id, true);
-      const targetFace = document.getElementById("targetFace");
-      if (targetFace) {
-        targetFace.style.transform = "none";
-        targetFace.style.opacity = "1.0";
-      }
-      const badge = document.getElementById("targetElevationBadge");
-      if (badge) {
-        badge.innerText = "EXPOSED";
-        badge.style.backgroundColor = "var(--mil-hit)";
-      }
-      const timerLabel = document.getElementById("exposureTimerLabel");
-      if (timerLabel) timerLabel.innerText = "EXPOSED [ARMED]";
-      const pBar = document.getElementById("exposureProgressBar");
-      if (pBar) pBar.style.width = "100%";
-      setTimeout(() => calibrateEmptyTargetBaseline(), 700);
+      // Always route target raise through the full 5.0s Hit/Miss armed cycle
+      handlePopCommand(id, 5.0);
     }
 
     function lowerTarget(id) {
       targetServoStates[id] = false;
       elevationState = 'DOWN';
+      if (exposureTimer) {
+        clearInterval(exposureTimer);
+        exposureTimer = null;
+      }
       sendRawCommand(`DOWN,${id}`);
+      fetch("http://127.0.0.1:8001/drop", { method: "POST" }).catch(() => {});
       logTerm(`[Servo Pop] Lowering Target ${id} (DOWN,${id})...`);
       updateServoButtonUI(id, false);
       const targetFace = document.getElementById("targetFace");
@@ -1461,6 +1452,9 @@
       if (timerLabel) timerLabel.innerText = "CONCEALED";
       const pBar = document.getElementById("exposureProgressBar");
       if (pBar) pBar.style.width = "0%";
+      if (typeof updateStandaloneStatusPanel === "function" && !stuckBulletAcknowledged) {
+        updateStandaloneStatusPanel("STANDBY", "STANDBY — TARGET CONCEALED", "#a5b592", "PRESS [0] OR CLICK POP TARGET 1 TO ARM");
+      }
     }
 
     function sendPopServo(action) {
@@ -1472,6 +1466,7 @@
           exposureTimer = null;
         }
         sendRawCommand("DOWN,ALL");
+        fetch("http://127.0.0.1:8001/drop", { method: "POST" }).catch(() => {});
         logTerm("[Servo Pop] Dropping all targets (DOWN,ALL)...");
         updateAllServoButtonsUI(false);
         const targetFace = document.getElementById("targetFace");
@@ -1488,6 +1483,9 @@
         if (timerLabel) timerLabel.innerText = "CONCEALED";
         const pBar = document.getElementById("exposureProgressBar");
         if (pBar) pBar.style.width = "0%";
+        if (typeof updateStandaloneStatusPanel === "function") {
+          updateStandaloneStatusPanel("STANDBY", "STANDBY — ALL TARGETS DOWN", "#a5b592", "PRESS [0] OR CLICK POP TARGET 1 TO ARM");
+        }
       } else {
         raiseTarget(action);
       }
@@ -1498,9 +1496,15 @@
       elevationState = 'UP';
       targetServoStates[targetId] = true;
 
-      // Record exact pop-up timestamp so we ignore mechanical wobble during first 1.2s
+      // Record exact pop-up timestamp so we ignore mechanical wobble during first 0.8s
       window.lastPopUpTimeMs = Date.now();
+      window.ignoredWifiStaticPos = null;
       stuckBulletAcknowledged = false;
+
+      if (autoDropAfterShotTimer) {
+        clearTimeout(autoDropAfterShotTimer);
+        autoDropAfterShotTimer = null;
+      }
 
       const resBadge = document.getElementById("shotResultBadge");
       if (resBadge) {
@@ -1511,7 +1515,12 @@
       const banner = document.getElementById("nerfOptimalHudBanner");
       if (banner) banner.style.display = "none";
 
-      // Send physical serial/WiFi command to raise target!
+      if (typeof updateStandaloneStatusPanel === "function") {
+        updateStandaloneStatusPanel("ARMED", `🎯 TARGET UP (ARMED) — ${duration.toFixed(1)}s`, "#ffcc00", "WAITING FOR YELLOW NERF DART ON BLACK TARGET...");
+      }
+
+      // Arm Python Backend (if connected on COM17) AND send Wi-Fi UP command to Pop-Up ESP32
+      fetch("http://127.0.0.1:8001/arm", { method: "POST" }).catch(() => {});
       sendRawCommand(`UP,${targetId}`);
       logTerm(`[Pop Cycle] Target ${targetId} POPPED UP for ${duration.toFixed(1)}s (UP,${targetId})`);
 
@@ -1529,16 +1538,21 @@
 
       updateServoButtonUI(targetId, true);
 
-      setTimeout(() => calibrateEmptyTargetBaseline(), 700);
-
       if (exposureTimer) clearInterval(exposureTimer);
       exposureTimer = setInterval(() => {
+        if (stuckBulletAcknowledged || elevationState !== 'UP') {
+          clearInterval(exposureTimer);
+          exposureTimer = null;
+          return;
+        }
         exposureSeconds -= 0.1;
         if (exposureSeconds <= 0) {
           clearInterval(exposureTimer);
           exposureTimer = null;
           foldTarget(targetId);
+          fetch("http://127.0.0.1:8001/drop", { method: "POST" }).catch(() => {});
           if (!stuckBulletAcknowledged) {
+            window.totalMissesCount = (window.totalMissesCount || 0) + 1;
             const rb = document.getElementById("shotResultBadge");
             if (rb) {
               rb.innerText = "❌ MISS — NO BULLET DETECTED (TARGET DROPPED)";
@@ -1553,6 +1567,10 @@
               bnr.style.color = "#ff453a";
               bnr.style.boxShadow = "0 0 20px rgba(255, 69, 58, 0.7)";
             }
+            if (typeof updateStandaloneStatusPanel === "function") {
+              updateStandaloneStatusPanel("MISS", "❌ MISS! NO BULLET DETECTED", "#ff453a", "5.0s EXPIRED • TARGET DROPPED AUTOMATICALLY");
+            }
+            playOptimalHitChirp(false);
             logTerm(`[🎯 SHOT RESULT] ❌ MISS — 5.0s elapsed with no bullet hit. Target dropped.`);
           }
         } else {
@@ -1560,6 +1578,13 @@
           if (tLabel) tLabel.innerText = `${exposureSeconds.toFixed(1)}s REMAINING`;
           const pBar = document.getElementById("exposureProgressBar");
           if (pBar) pBar.style.width = `${(exposureSeconds / duration) * 100}%`;
+          const rb = document.getElementById("shotResultBadge");
+          if (rb && !stuckBulletAcknowledged) {
+            rb.innerText = `🎯 TARGET UP (ARMED) — FIRE NOW! (${exposureSeconds.toFixed(1)}s)`;
+          }
+          if (typeof updateStandaloneStatusPanel === "function" && !stuckBulletAcknowledged) {
+            updateStandaloneStatusPanel("ARMED", `🎯 TARGET UP — ${exposureSeconds.toFixed(1)}s LEFT`, "#ffcc00", "FIRE YELLOW NERF DART AT BLACK TARGET NOW!");
+          }
         }
       }, 100);
     }
@@ -2140,28 +2165,101 @@
     // Unified continuous CV loop that monitors active stream (USB UVC webcam, COM17 serial, or WiFi MJPEG)
     let cvLoopRunning = false;
     function startCvDetectionLoop() {
-      // Dedicated Python Backend Service (http://localhost:8001) handles 100% of COM17 video analysis & hit detection.
+      // Dedicated Python Backend Service (http://127.0.0.1:8001) handles 100% of COM17 video analysis & hit detection.
+      // Browser-side pixel loop is disabled so only the Python backend triggers target drop.
       cvLoopRunning = true;
+    }
+
+    function updateStandaloneStatusPanel(mode, titleText, accentColor, subText) {
+      const offlineNotice = document.getElementById("cameraOfflineNotice");
+      if (!offlineNotice) return;
+      offlineNotice.style.display = "flex";
+      const hits = window.totalHitsCount || 0;
+      const misses = window.totalMissesCount || 0;
+      const bgGlow = mode === "HIT"
+        ? "rgba(22, 68, 30, 0.96)"
+        : mode === "MISS"
+        ? "rgba(68, 18, 18, 0.96)"
+        : mode === "ARMED"
+        ? "rgba(45, 40, 12, 0.94)"
+        : "rgba(13, 15, 12, 0.94)";
+
+      offlineNotice.style.backgroundColor = bgGlow;
+      offlineNotice.style.border = `2px solid ${accentColor}`;
+      offlineNotice.innerHTML = `
+        <div style="text-align:center; padding:12px 10px; width:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
+          <div style="font-size:9px; color:#b8c4b2; letter-spacing:1px; font-weight:700;">
+            ⚡ STANDALONE HIT / MISS MONITOR (NO VIDEO STREAM)
+          </div>
+          <div style="
+            font-size:${mode === 'HIT' || mode === 'MISS' ? '16px' : '13px'};
+            font-weight:900;
+            color:${accentColor};
+            letter-spacing:0.8px;
+            padding:8px 12px;
+            border:2px solid ${accentColor};
+            border-radius:4px;
+            background:rgba(0,0,0,0.45);
+            box-shadow:0 0 18px ${accentColor}55;
+            width:92%;
+          ">
+            ${titleText}
+          </div>
+          <div style="color:#e8e4d9; font-size:10px; font-weight:700; line-height:1.35;">
+            ${subText || ""}
+          </div>
+          <div style="
+            display:flex;
+            gap:12px;
+            margin-top:4px;
+            padding:6px 14px;
+            background:rgba(0,0,0,0.55);
+            border:1px solid #3a4438;
+            border-radius:4px;
+            font-size:11px;
+            font-weight:800;
+          ">
+            <span style="color:#2cff55;">🎯 HITS: ${hits}</span>
+            <span style="color:#666;">|</span>
+            <span style="color:#ff453a;">❌ MISSES: ${misses}</span>
+          </div>
+        </div>`;
     }
 
     function handleNerfBulletStuck(cx, cy, distFromCenter, isOptimal, source) {
       if (stuckBulletAcknowledged) return;
       stuckBulletAcknowledged = true;
+      window.totalHitsCount = (window.totalHitsCount || 0) + 1;
+
+      // 0. Cancel exposure countdown immediately so MISS never triggers after a HIT
+      if (exposureTimer) {
+        clearInterval(exposureTimer);
+        exposureTimer = null;
+      }
 
       // 1. IMMEDIATELY DROP THE PHYSICAL TARGET!
-      // Commands servo DOWN,1 over COM7 instantly without delay
       foldTarget(1);
-      logTerm(`[🎯 NERF HIT (${source})] Yellow bullet detected in OPTIMAL BLACK REGION! Target DROPPED IMMEDIATELY (DOWN,1)...`);
+      fetch("http://127.0.0.1:8001/drop", { method: "POST" }).catch(() => {});
+      logTerm(`[🎯 NERF HIT (${source})] Yellow bullet detected on BLACK TARGET! Target DROPPED IMMEDIATELY (DOWN,1)...`);
 
-      // 2. Animate Green Optimal Circle
+      // 2. Update Shot Result Badge & Standalone Status Panel
+      const rb = document.getElementById("shotResultBadge");
+      if (rb) {
+        rb.innerText = `🎯 HIT DETECTED! — TARGET DROPPED (${source})`;
+        rb.style.color = "#2cff55";
+        rb.style.borderColor = "#2cff55";
+      }
+      updateStandaloneStatusPanel("HIT", "🎯 HIT DETECTED!", "#2cff55", `${source} • TARGET DROPPED AUTOMATICALLY`);
+
+      // 3. Animate Green Optimal Circle
       const optCircle = document.getElementById("optimalZoneCircle");
       if (optCircle) {
         optCircle.classList.remove("optimal-hit-active");
-        void optCircle.offsetWidth; // Force CSS reflow
+        void optCircle.offsetWidth;
         optCircle.classList.add("optimal-hit-active");
       }
 
-      // 3. Show HUD banner
+      // 4. Show HUD banner
       const banner = document.getElementById("nerfOptimalHudBanner");
       if (banner) {
         banner.style.display = "block";
@@ -2171,7 +2269,7 @@
         banner.style.boxShadow = "0 0 25px rgba(44, 255, 85, 0.9)";
       }
 
-      // 4. Add visual impact dot on camera viewport (EXACTLY ONE DOT)
+      // 5. Add visual impact dot on camera viewport
       const container = document.getElementById("camImpactDotsContainer");
       if (container) {
         container.innerHTML = "";
@@ -2190,30 +2288,13 @@
         container.appendChild(dot);
       }
 
-      // 5. Play confirmation tone
+      // 6. Play confirmation tone
       playOptimalHitChirp(true);
-
-      // 6. Clear any running exposure timer countdown
-      if (exposureTimer) {
-        clearInterval(exposureTimer);
-        exposureTimer = null;
-      }
 
       const timerLabel = document.getElementById("exposureTimerLabel");
       if (timerLabel) {
         timerLabel.innerText = "CONCEALED [HIT DROPPED]";
       }
-
-      // 7. Auto-clear shot markings after 3.0s so UI is clean for next pop
-      if (autoDropAfterShotTimer) {
-        clearTimeout(autoDropAfterShotTimer);
-      }
-
-      autoDropAfterShotTimer = setTimeout(() => {
-        logTerm("[Auto-Cycle] Shot markings cleared. Target ready for next pop.");
-        resetShots();
-        autoDropAfterShotTimer = null;
-      }, 3000);
     }
 
     function playOptimalHitChirp(isOptimal) {
@@ -2224,9 +2305,11 @@
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.type = "sine";
-        osc.frequency.setValueAtTime(isOptimal ? 880 : 587.33, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(isOptimal ? 880 : 280, audioCtx.currentTime);
         if (isOptimal) {
           osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.16);
+        } else {
+          osc.frequency.exponentialRampToValueAtTime(160, audioCtx.currentTime + 0.22);
         }
         gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.28);
@@ -2235,29 +2318,25 @@
       } catch(e) {}
     }
 
-    // Video stream is strictly through COM port (COM17 via Python Backend @ :8001 or Direct WebSerial)
+    // Standalone Battery Mode: No live video feed streamed to laptop; pure Hit/Miss Telemetry
     async function refreshCameraDevices() {
       const select = document.getElementById("cameraSourceSelect");
       if (select) {
-        select.innerHTML = '<option value="serial">🔌 ESP32-P4 USB Serial (COM17)</option>';
-        select.value = "serial";
+        select.innerHTML = '<option value="standalone">📡 Standalone Hit/Miss Telemetry (No Video Stream)</option>';
+        select.value = "standalone";
       }
 
-      // Connect image viewport to Python CV Backend video feed
       const img = document.getElementById("espCameraImg");
-      const offlineNotice = document.getElementById("cameraOfflineNotice");
+      const video = document.getElementById("webcamVideo");
       if (img) {
-        img.src = "http://localhost:8001/video_feed";
-        img.style.display = "block";
-        img.onerror = () => {
-          // If Python backend is not running, show prompt
-          if (offlineNotice) offlineNotice.style.display = "flex";
-        };
-        img.onload = () => {
-          if (offlineNotice) offlineNotice.style.display = "none";
-        };
+        img.removeAttribute("src");
+        img.style.display = "none";
       }
-      logTerm("[Camera Stream] Configured strictly for COM17 via Python CV Backend (http://localhost:8001/video_feed).");
+      if (video) {
+        video.style.display = "none";
+      }
+      updateStandaloneStatusPanel("STANDBY", "STANDBY — PRESS [0] TO POP TARGET", "#2cff55", "4-STAGE YELLOW DART + ORANGE TIP CV READY");
+      logTerm("[Standalone Mode] Video streaming disabled. Live Hit/Miss Telemetry active.");
     }
 
     function onCameraSourceChange(val) {
@@ -2723,112 +2802,110 @@
       }
 
       // 2. ALWAYS ALSO send Pop-Up Target commands (UP, DOWN, etc.) over Wi-Fi to Pop-Up ESP32 (http://192.168.4.1)
-      //    even when Motor UART is connected!
       const isPopTargetCmd = cmd.startsWith("UP") || cmd.startsWith("DOWN") || cmd === "PING" || cmd === "STATUS";
       if (isPopTargetCmd || !isConnected) {
         const input = document.getElementById("cameraStreamUrlInput");
         let wifiBaseUrl = input ? input.value.trim() : "http://192.168.4.1/";
         if (!wifiBaseUrl.startsWith("http")) wifiBaseUrl = "http://" + wifiBaseUrl;
         wifiBaseUrl = wifiBaseUrl.replace(/\/+$/, "");
+        const targetUrl = `${wifiBaseUrl}/cmd?action=${encodeURIComponent(cmd)}`;
 
         try {
-          fetch(`${wifiBaseUrl}/cmd?action=${encodeURIComponent(cmd)}`, { method: "POST", mode: "no-cors" }).catch(() => {});
+          fetch(targetUrl, { signal: AbortSignal.timeout(2000), cache: "no-store" })
+            .then(r => {
+              if (r.ok) logTerm(`[WiFi Target] ✓ '${cmd}' acknowledged by Pop ESP32`);
+            })
+            .catch(() => {
+              fetch(targetUrl, { method: "POST", mode: "no-cors" }).catch(() => {});
+            });
           logTerm(`[WiFi Target] Dispatched '${cmd}' wirelessly to Pop-Up ESP32 at ${wifiBaseUrl}`);
         } catch (e) {}
       }
     }
 
-    // Multi-Source Telemetry Polling (Python Vision Backend @ :8001 + Pop ESP32 @ 192.168.4.1)
-    let ignoredStaticX = -1;
-    let ignoredStaticY = -1;
-    let ignoredStaticPx = 0;
-    let pythonBackendConnected = false;
-
+    // Dual-Source Telemetry Polling:
+    // 1. Calibrated 4-Stage CV Backend (http://127.0.0.1:8001/metrics)
+    // 2. Standalone Pop-Up ESP32 Wi-Fi Telemetry (http://192.168.4.1/telemetry)
+    let isPollingWifi = false;
     async function pollWifiTelemetry() {
-      // 1. Try Python Computer Vision Backend Unit first (http://localhost:8001/metrics)
+      if (isPollingWifi) return;
+      isPollingWifi = true;
+
+      const timeSincePop = Date.now() - (window.lastPopUpTimeMs || 0);
+      const isArmedAndSettled = (elevationState === 'UP') && !stuckBulletAcknowledged && (timeSincePop >= 750);
+      const telem = document.getElementById("hudCvTelemetry");
+
+      // Source 1: Calibrated 4-Stage CV Backend (http://127.0.0.1:8001/metrics)
       try {
-        const pyRes = await fetch("http://localhost:8001/metrics", { signal: AbortSignal.timeout(400) });
-        if (pyRes.ok) {
-          const pyData = await pyRes.json();
-          pythonBackendConnected = true;
-
-          // Connect video element to Python HUD stream if not connected
-          const camImg = document.getElementById("espCameraImg");
-          if (camImg && (!camImg.src || !camImg.src.includes("8001"))) {
-            camImg.src = "http://localhost:8001/video_feed";
-            camImg.style.display = "block";
-            const offlineNotice = document.getElementById("cameraOfflineNotice");
-            if (offlineNotice) offlineNotice.style.display = "none";
-          }
-
-          const telem = document.getElementById("hudCvTelemetry");
-          if (telem) {
-            telem.textContent = `PY-CV: ${pyData.fps} FPS // TARGET: ${pyData.target_state} // HIT: ${pyData.hit ? 'YES' : 'NO'}`;
-            telem.setAttribute("fill", pyData.hit ? "#2cff55" : "#ffcc00");
-          }
-
-          if (pyData.hit && !stuckBulletAcknowledged && elevationState === 'UP') {
-            const hx = (pyData.x_norm || 0.5) * 160;
-            const hy = (pyData.y_norm || 0.5) * 160;
-            const rb = document.getElementById("shotResultBadge");
-            if (rb) {
-              rb.innerText = `🎯 HIT DETECTED! (${pyData.dart_pixels} PX, ${pyData.confidence}%) — TARGET DROPPED`;
-              rb.style.color = "#2cff55";
-              rb.style.borderColor = "#2cff55";
+        const bRes = await fetch("http://127.0.0.1:8001/metrics", { signal: AbortSignal.timeout(500), cache: "no-store" });
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (bData.hit && isArmedAndSettled) {
+            const hitTsMs = (bData.hit_timestamp || 0) * 1000;
+            // Ensure hit occurred during this pop cycle (or within last 2.5s)
+            if (!hitTsMs || hitTsMs >= (window.lastPopUpTimeMs - 500)) {
+              const hx = bData.x_norm ? Math.round(bData.x_norm * 160) : 80;
+              const hy = bData.y_norm ? Math.round(bData.y_norm * 160) : 80;
+              const px = bData.dart_pixels || 0;
+              handleNerfBulletStuck(hx, hy, 0, true, `4-STAGE CV (${px} PX, ${bData.confidence || 99}%)`);
+              isPollingWifi = false;
+              return;
             }
-            handleNerfBulletStuck(hx, hy, 0, true, `PYTHON CV UNIT (${pyData.dart_pixels} PX, ${pyData.confidence}%)`);
-            return;
           }
-          if (pyData.hit) return;
+          if (telem) {
+            const hitText = stuckBulletAcknowledged ? "HIT (DROPPED)" : (elevationState === 'UP' ? "ARMED" : "STANDBY");
+            telem.textContent = `CV: ${bData.fps || 0} FPS // STATE: ${hitText}`;
+            telem.setAttribute("fill", stuckBulletAcknowledged ? "#2cff55" : "#ffcc00");
+          }
         }
-      } catch (e) {
-        pythonBackendConnected = false;
-      }
+      } catch (e) {}
 
-      // 2. Direct Pop-Up ESP32 Fallback Polling (http://192.168.4.1/telemetry)
+      // Source 2: Standalone Pop-Up ESP32 Wi-Fi Telemetry (http://192.168.4.1/telemetry)
       try {
         const input = document.getElementById("cameraStreamUrlInput");
         let wifiBaseUrl = input ? input.value.trim() : "http://192.168.4.1/";
         if (!wifiBaseUrl.startsWith("http")) wifiBaseUrl = "http://" + wifiBaseUrl;
         wifiBaseUrl = wifiBaseUrl.replace(/\/+$/, "");
-        const res = await fetch(`${wifiBaseUrl}/telemetry`, { signal: AbortSignal.timeout(500) });
+
+        const res = await fetch(`${wifiBaseUrl}/telemetry`, { signal: AbortSignal.timeout(1500), cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
-          const telem = document.getElementById("hudCvTelemetry");
-          const nowMs = Date.now();
-          const timeSincePop = nowMs - (window.lastPopUpTimeMs || 0);
-          const isArmedAndSettled = (elevationState === 'UP' && timeSincePop >= 1200);
+          const hx = (typeof data.x === "number" && data.x > 0) ? data.x : 80;
+          const hy = (typeof data.y === "number" && data.y > 0) ? data.y : 80;
+          const px = data.dartPixels || 0;
 
-          if (data.hit) {
-            const hx = (typeof data.x === "number" && data.x > 0) ? data.x : 80;
-            const hy = (typeof data.y === "number" && data.y > 0) ? data.y : 80;
-            const px = data.dartPixels || 0;
+          const dot = document.getElementById("camStatusDot");
+          const badge = document.getElementById("camStatusBadge");
+          if (dot) dot.style.backgroundColor = "#2cff55";
+          if (badge) {
+            badge.innerText = data.p4Link ? "WIFI ONLINE • P4 READY" : "WIFI ONLINE";
+            badge.style.color = "var(--mil-hit)";
+          }
 
-            if (!isArmedAndSettled) {
-              ignoredStaticX = hx;
-              ignoredStaticY = hy;
-              ignoredStaticPx = px;
-            } else if (!stuckBulletAcknowledged) {
-              const isFallback80 = (hx === 80 && hy === 80);
-              const isSameStaticSpot = (ignoredStaticX > 0 && Math.abs(hx - ignoredStaticX) <= 12 && Math.abs(hy - ignoredStaticY) <= 12 && Math.abs(px - ignoredStaticPx) < 40);
-              if (!isFallback80 && !isSameStaticSpot) {
-                const rb = document.getElementById("shotResultBadge");
-                if (rb) {
-                  rb.innerText = `🎯 HIT DETECTED! (${px} PX) — TARGET DROPPED`;
-                  rb.style.color = "#2cff55";
-                  rb.style.borderColor = "#2cff55";
-                }
-                handleNerfBulletStuck(hx, hy, 0, true, `ESP32-P4 STANDALONE HIT (${px} PX)`);
+          // Record any static pre-existing coordinates during the first 750ms after pop-up
+          if (elevationState === 'UP' && timeSincePop < 750 && data.hit) {
+            window.ignoredWifiStaticPos = { x: hx, y: hy, px: px };
+          }
+
+          if (data.hit && isArmedAndSettled) {
+            const isFallbackNoise = (hx === 80 && hy === 80 && px === 0);
+            let isUnchangedStatic = false;
+            if (window.ignoredWifiStaticPos) {
+              const dx = Math.abs(hx - window.ignoredWifiStaticPos.x);
+              const dy = Math.abs(hy - window.ignoredWifiStaticPos.y);
+              if (dx <= 6 && dy <= 6 && px <= window.ignoredWifiStaticPos.px + 25) {
+                isUnchangedStatic = true;
               }
             }
-          }
-
-          if (telem && !stuckBulletAcknowledged && !pythonBackendConnected) {
-            telem.textContent = `WIFI LINK: OK // TARGET: ${elevationState} // STATUS: ${isArmedAndSettled ? 'ARMED FOR HIT' : 'STANDBY'}`;
-            telem.setAttribute("fill", isArmedAndSettled ? "#ffcc00" : "#2cff55");
+            if (!isFallbackNoise && !isUnchangedStatic) {
+              handleNerfBulletStuck(hx, hy, 0, true, `WIFI STANDALONE CV (${px} PX)`);
+            }
           }
         }
-      } catch (e) {}
+      } catch (e) {
+      } finally {
+        isPollingWifi = false;
+      }
     }
     setInterval(pollWifiTelemetry, 350);
 
