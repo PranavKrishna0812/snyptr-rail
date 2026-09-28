@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SNYPTR-RAIL — Offline Shot Error Pattern & Dataset Report</title>
+  <style>
+    body { background: #121512; color: #ded8ce; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; margin: 0; }
+    .kpi-row { display: flex; gap: 16px; margin-bottom: 24px; }
+    .kpi-card { flex: 1; background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 16px; text-align: center; }
+    .kpi-val { font-size: 32px; font-weight: 800; font-family: monospace; color: #2cff55; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div style="max-width: 960px; margin: 0 auto;">
+    <h1 style="font-family: monospace; color: #2cff55; margin-bottom: 4px;">SNYPTR-RAIL // SHOT ERROR PATTERN & DATASET REPORT</h1>
+    <p style="color: #888; font-family: monospace; margin-top: 0;">100% OFFLINE REPORT // GENERATED 2026-09-28 15:38:23</p>
+
+    <div class="kpi-row">
+      <div class="kpi-card"><div style="color: #aaa; font-size: 11px;">TOTAL POP-UPS</div><div class="kpi-val" style="color: #fff;">6</div></div>
+      <div class="kpi-card"><div style="color: #aaa; font-size: 11px;">CONFIRMED HITS</div><div class="kpi-val" style="color: #2cff55;">3</div></div>
+      <div class="kpi-card"><div style="color: #aaa; font-size: 11px;">MISSED SHOTS</div><div class="kpi-val" style="color: #ff4444;">3</div></div>
+      <div class="kpi-card"><div style="color: #aaa; font-size: 11px;">ACCURACY RATE</div><div class="kpi-val">50.0%</div></div>
+      <div class="kpi-card"><div style="color: #aaa; font-size: 11px;">REAL PHOTOS</div><div class="kpi-val" style="color: #ffcc00;">0</div></div>
+    </div>
+
+    <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 18px; margin-bottom: 24px; font-family: monospace;">
+      <h3 style="margin-top: 0; color: #ffcc00;">ROOT-CAUSE ERROR PATTERN SUMMARY</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+        <tr style="border-bottom: 1px solid #333; color: #888;">
+          <th style="text-align: left; padding: 6px;">ERROR CATEGORY</th>
+          <th style="text-align: right; padding: 6px;">COUNT</th>
+          <th style="text-align: right; padding: 6px;">PERCENTAGE</th>
+          <th style="text-align: left; padding: 6px; width: 45%;">RECOMMENDED ACTION</th>
+        </tr>
+        <tr>
+          <td style="padding: 8px 6px; color: #ff6666;">OUTSIDE_TARGET (0 yellow px)</td>
+          <td style="text-align: right; padding: 6px;">2</td>
+          <td style="text-align: right; padding: 6px;">66.7%</td>
+          <td style="padding: 6px; color: #aaa;">Bullet completely missed the silhouette body. Re-aim toward center bullseye.</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 6px; color: #ffaa44;">GRAZING_SHOT (&lt; 96 px)</td>
+          <td style="text-align: right; padding: 6px;">1</td>
+          <td style="text-align: right; padding: 6px;">33.3%</td>
+          <td style="padding: 6px; color: #aaa;">Dart clipped outer edge. Increase spring/air pressure or train CNN model.</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 6px; color: #ffcc44;">ALIGNMENT_ERROR (&lt; 15% black)</td>
+          <td style="text-align: right; padding: 6px;">0</td>
+          <td style="text-align: right; padding: 6px;">0.0%</td>
+          <td style="padding: 6px; color: #aaa;">Target not fully raised upright or camera is tilted. Check servo horn position.</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 6px; color: #ffff66;">SCATTERED_LIGHT (Purity failed)</td>
+          <td style="text-align: right; padding: 6px;">0</td>
+          <td style="text-align: right; padding: 6px;">0.0%</td>
+          <td style="padding: 6px; color: #aaa;">Ambient glare or reflections on card. Diffuse overhead lighting.</td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="background: #182017; border: 1px solid #2cff55; border-radius: 6px; padding: 14px; margin-bottom: 24px; font-family: monospace;">
+      <h3 style="margin-top: 0; color: #2cff55;">CNN MODEL TRAINING INSTRUCTIONS</h3>
+      <p style="font-size: 12px; color: #ccc; margin: 4px 0;">All real captured camera photos have been formatted in YOLO format in <code>shot_logs/labels/</code>.</p>
+      <p style="font-size: 12px; color: #ccc; margin: 4px 0;">To train the lightweight ESP32 CNN model, run:</p>
+      <pre style="background: #0d120d; padding: 10px; border-radius: 4px; color: #2cff55; font-size: 13px;">python train_cnn.py</pre>
+    </div>
+
+    <h2 style="font-family: monospace; color: #ded8ce; margin-bottom: 12px;">RECORDED SHOT LOGS WITH REAL HARDWARE CAMERA PHOTOS</h2>
+    
+        <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 14px; margin-bottom: 12px; display: flex; gap: 16px; align-items: center;">
+          <div style="width: 180px; flex-shrink: 0; text-align:center;">
+            <div style="background:#151815; height:120px; display:flex; align-items:center; justify-content:center; color:#667766; font-size:11px; border:1px dashed #334433;">No Real Photo</div>
+            <div style="font-size:9px; color:#2cff55; margin-top:4px;">ESP32-P4 OV5647 PHOTO</div>
+          </div>
+          <div style="flex: 1; font-family: monospace;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <span style="font-size: 15px; font-weight: bold; color: #fff;">Shot #6</span>
+              <span style="padding: 3px 8px; border-radius: 3px; font-weight: bold; background: #2cff55; color: #000;">CONFIRMED HIT</span>
+            </div>
+            <div style="color: #bbb; font-size: 12px; line-height: 1.6;">
+              <div>Duration: <b>1400ms</b> | Coordinates: <b>(370, 450)</b> | Impact Pixels: <b>68px</b></div>
+              <div>Peak Yellow: <b>60px</b> | Peak Orange: <b>12px</b> | Target Black%: <b>42.0%</b></div>
+              <div style="color: #2cff55; margin-top: 4px;"><b>Diagnosis:</b> CLEAN_HIT: Registered 68 px at (370, 450)</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 14px; margin-bottom: 12px; display: flex; gap: 16px; align-items: center;">
+          <div style="width: 180px; flex-shrink: 0; text-align:center;">
+            <div style="background:#151815; height:120px; display:flex; align-items:center; justify-content:center; color:#667766; font-size:11px; border:1px dashed #334433;">No Real Photo</div>
+            <div style="font-size:9px; color:#2cff55; margin-top:4px;">ESP32-P4 OV5647 PHOTO</div>
+          </div>
+          <div style="flex: 1; font-family: monospace;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <span style="font-size: 15px; font-weight: bold; color: #fff;">Shot #5</span>
+              <span style="padding: 3px 8px; border-radius: 3px; font-weight: bold; background: #ff4444; color: #000;">MISS / DROP</span>
+            </div>
+            <div style="color: #bbb; font-size: 12px; line-height: 1.6;">
+              <div>Duration: <b>3200ms</b> | Coordinates: <b>(-1, -1)</b> | Impact Pixels: <b>0px</b></div>
+              <div>Peak Yellow: <b>0px</b> | Peak Orange: <b>0px</b> | Target Black%: <b>8.5%</b></div>
+              <div style="color: #ff4444; margin-top: 4px;"><b>Diagnosis:</b> OUTSIDE_TARGET: 0 yellow/orange pixels on black silhouette (shot missed target or was blocked)</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 14px; margin-bottom: 12px; display: flex; gap: 16px; align-items: center;">
+          <div style="width: 180px; flex-shrink: 0; text-align:center;">
+            <div style="background:#151815; height:120px; display:flex; align-items:center; justify-content:center; color:#667766; font-size:11px; border:1px dashed #334433;">No Real Photo</div>
+            <div style="font-size:9px; color:#2cff55; margin-top:4px;">ESP32-P4 OV5647 PHOTO</div>
+          </div>
+          <div style="flex: 1; font-family: monospace;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <span style="font-size: 15px; font-weight: bold; color: #fff;">Shot #4</span>
+              <span style="padding: 3px 8px; border-radius: 3px; font-weight: bold; background: #ff4444; color: #000;">MISS / DROP</span>
+            </div>
+            <div style="color: #bbb; font-size: 12px; line-height: 1.6;">
+              <div>Duration: <b>4000ms</b> | Coordinates: <b>(-1, -1)</b> | Impact Pixels: <b>0px</b></div>
+              <div>Peak Yellow: <b>24px</b> | Peak Orange: <b>4px</b> | Target Black%: <b>41.9%</b></div>
+              <div style="color: #ff4444; margin-top: 4px;"><b>Diagnosis:</b> GRAZING_SHOT: Peak yellow was 24 px (below 96 px cluster threshold, glancing impact)</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 14px; margin-bottom: 12px; display: flex; gap: 16px; align-items: center;">
+          <div style="width: 180px; flex-shrink: 0; text-align:center;">
+            <div style="background:#151815; height:120px; display:flex; align-items:center; justify-content:center; color:#667766; font-size:11px; border:1px dashed #334433;">No Real Photo</div>
+            <div style="font-size:9px; color:#2cff55; margin-top:4px;">ESP32-P4 OV5647 PHOTO</div>
+          </div>
+          <div style="flex: 1; font-family: monospace;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <span style="font-size: 15px; font-weight: bold; color: #fff;">Shot #3</span>
+              <span style="padding: 3px 8px; border-radius: 3px; font-weight: bold; background: #2cff55; color: #000;">CONFIRMED HIT</span>
+            </div>
+            <div style="color: #bbb; font-size: 12px; line-height: 1.6;">
+              <div>Duration: <b>950ms</b> | Coordinates: <b>(420, 390)</b> | Impact Pixels: <b>92px</b></div>
+              <div>Peak Yellow: <b>82px</b> | Peak Orange: <b>16px</b> | Target Black%: <b>42.8%</b></div>
+              <div style="color: #2cff55; margin-top: 4px;"><b>Diagnosis:</b> CLEAN_HIT: Registered 92 px at (420, 390)</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 14px; margin-bottom: 12px; display: flex; gap: 16px; align-items: center;">
+          <div style="width: 180px; flex-shrink: 0; text-align:center;">
+            <div style="background:#151815; height:120px; display:flex; align-items:center; justify-content:center; color:#667766; font-size:11px; border:1px dashed #334433;">No Real Photo</div>
+            <div style="font-size:9px; color:#2cff55; margin-top:4px;">ESP32-P4 OV5647 PHOTO</div>
+          </div>
+          <div style="flex: 1; font-family: monospace;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <span style="font-size: 15px; font-weight: bold; color: #fff;">Shot #2</span>
+              <span style="padding: 3px 8px; border-radius: 3px; font-weight: bold; background: #ff4444; color: #000;">MISS / DROP</span>
+            </div>
+            <div style="color: #bbb; font-size: 12px; line-height: 1.6;">
+              <div>Duration: <b>3500ms</b> | Coordinates: <b>(-1, -1)</b> | Impact Pixels: <b>0px</b></div>
+              <div>Peak Yellow: <b>0px</b> | Peak Orange: <b>0px</b> | Target Black%: <b>43.1%</b></div>
+              <div style="color: #ff4444; margin-top: 4px;"><b>Diagnosis:</b> OUTSIDE_TARGET: 0 yellow/orange pixels on black silhouette (shot missed target or was blocked)</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="background: #1e241c; border: 1px solid #354033; border-radius: 6px; padding: 14px; margin-bottom: 12px; display: flex; gap: 16px; align-items: center;">
+          <div style="width: 180px; flex-shrink: 0; text-align:center;">
+            <div style="background:#151815; height:120px; display:flex; align-items:center; justify-content:center; color:#667766; font-size:11px; border:1px dashed #334433;">No Real Photo</div>
+            <div style="font-size:9px; color:#2cff55; margin-top:4px;">ESP32-P4 OV5647 PHOTO</div>
+          </div>
+          <div style="flex: 1; font-family: monospace;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <span style="font-size: 15px; font-weight: bold; color: #fff;">Shot #1</span>
+              <span style="padding: 3px 8px; border-radius: 3px; font-weight: bold; background: #2cff55; color: #000;">CONFIRMED HIT</span>
+            </div>
+            <div style="color: #bbb; font-size: 12px; line-height: 1.6;">
+              <div>Duration: <b>1120ms</b> | Coordinates: <b>(395, 415)</b> | Impact Pixels: <b>84px</b></div>
+              <div>Peak Yellow: <b>76px</b> | Peak Orange: <b>14px</b> | Target Black%: <b>42.5%</b></div>
+              <div style="color: #2cff55; margin-top: 4px;"><b>Diagnosis:</b> CLEAN_HIT: Registered 84 px at (395, 415)</div>
+            </div>
+          </div>
+        </div>
+        
+  </div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "id": 1790593632,
+  "result": "MISS",
+  "durationMs": 3601,
+  "hitX": 79,
+  "hitY": 79,
+  "hitPixels": 214208,
+  "peakYellow": 53952,
+  "peakOrange": 207376,
+  "darkPct": 0.0,
+  "diagnosis": "ALIGNMENT_ERROR: Dark target was only 0.0% of frame (target partially obscured or camera tilted)",
+  "savedAt": "2026-09-28T16:37:27.561674"
+}

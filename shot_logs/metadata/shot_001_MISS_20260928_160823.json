@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "result": "MISS",
+  "durationMs": 779521,
+  "hitX": 0,
+  "hitY": 0,
+  "hitPixels": 0,
+  "peakYellow": 0,
+  "peakOrange": 0,
+  "darkPct": 0.0,
+  "diagnosis": "OUTSIDE_TARGET: 0 yellow/orange pixels on black silhouette (shot missed target or was blocked)",
+  "savedAt": "2026-09-28T16:08:23.912923",
+  "impactPhoto": "images/shot_001_MISS.jpg"
+}

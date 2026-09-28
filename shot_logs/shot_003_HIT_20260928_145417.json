@@ -1,0 +1,14 @@
+{
+  "id": 3,
+  "result": "HIT",
+  "durationMs": 950,
+  "hitX": 240,
+  "hitY": 390,
+  "hitPixels": 82,
+  "peakYellow": 70,
+  "peakOrange": 16,
+  "darkPct": 42.8,
+  "diagnosis": "CLEAN_HIT: Registered 82 px at (240, 390)",
+  "savedAt": "2026-09-28T14:54:17.414971",
+  "imageFile": "shot_003_HIT_20260928_145417.jpg"
+}

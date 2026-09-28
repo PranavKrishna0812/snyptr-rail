@@ -78,6 +78,7 @@ BuiltinPCA9685 pwm(0x40);
 
 const int SERVO_DOWN = 350;
 const int SERVO_UP   = 150;
+const int SERVO_DOWN_DELAY = 2; // Decreased downfall speed by 50% (stepDelay = 2ms vs 1ms)
 
 int currentPos[7] = {350, 350, 350, 350, 350, 350, 350};
 String targetStateStr = "DOWN";
@@ -157,8 +158,8 @@ void executeCommand(String line, bool fromP4 = false) {
     g_hitActive = true;
     g_hitTimestampMs = now;
 
-    // Immediately drop Target 1 servo!
-    moveServoSmooth(0, SERVO_DOWN, 1);
+    // Immediately drop Target 1 servo smoothly (50% slower downfall speed)!
+    moveServoSmooth(0, SERVO_DOWN, SERVO_DOWN_DELAY);
     targetStateStr = "DOWN";
 
     Serial.printf("[P4 -> POP] GENUINE HIT (%d px at %d,%d) -> TARGET DROPPED IMMEDIATELY!\n",
@@ -212,7 +213,7 @@ void executeCommand(String line, bool fromP4 = false) {
     String idStr = line.substring(5);
     if (idStr == "ALL") {
       for (int channel = 0; channel < 7; channel++) {
-        moveServoSmooth(channel, SERVO_DOWN, 1);
+        moveServoSmooth(channel, SERVO_DOWN, SERVO_DOWN_DELAY);
       }
       targetStateStr = "DOWN";
       Serial.println("DOWN_CONFIRMED,ALL");
@@ -220,7 +221,7 @@ void executeCommand(String line, bool fromP4 = false) {
       int targetId = idStr.toInt(); // 1 to 7
       if (targetId >= 1 && targetId <= 7) {
         int channel = targetId - 1;
-        moveServoSmooth(channel, SERVO_DOWN, 1); // Fast immediate drop!
+        moveServoSmooth(channel, SERVO_DOWN, SERVO_DOWN_DELAY); // 50% slower smooth drop!
         targetStateStr = "DOWN";
         Serial.print("DOWN_CONFIRMED,");
         Serial.println(targetId);

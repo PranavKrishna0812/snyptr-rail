@@ -1,0 +1,14 @@
+{
+  "id": 4,
+  "result": "MISS",
+  "durationMs": 4000,
+  "hitX": -1,
+  "hitY": -1,
+  "hitPixels": 0,
+  "peakYellow": 24,
+  "peakOrange": 4,
+  "darkPct": 41.9,
+  "diagnosis": "GRAZING_SHOT: Peak yellow was 24 px (below 96 px cluster threshold, glancing impact)",
+  "savedAt": "2026-09-28T14:54:17.425864",
+  "imageFile": "shot_004_MISS_20260928_145417.jpg"
+}

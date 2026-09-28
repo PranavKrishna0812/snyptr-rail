@@ -1,0 +1,13 @@
+{
+  "id": 1790594563,
+  "result": "MISS",
+  "durationMs": 4887,
+  "hitX": 0,
+  "hitY": 0,
+  "hitPixels": 0,
+  "peakYellow": 10768,
+  "peakOrange": 4096,
+  "darkPct": 17.2,
+  "diagnosis": "SCATTERED_LIGHT: Peak yellow was 10768 px, but spatial cluster failed purity threshold",
+  "savedAt": "2026-09-28T16:52:48.756023"
+}

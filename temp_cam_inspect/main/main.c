@@ -375,13 +375,37 @@ static void set_camera_exposure_target(int value)
 #endif
 }
 
-// --- EMBEDDED LIGHTWEIGHT MODEL: YELLOW NERF BULLET DETECTOR WITH BASELINE DIFFERENCING ---
-// Scans the ENTIRE BLACK OPTIMAL REGION (Center 400, 400, Radius 275 px on 800x800 frame -> matches r=55 on 160x160)
-#define NERF_ROI_SIZE 110 // 110x110 grid sampled with step 5 = 550x550 pixels (Center 400 +/- 275 px)
-static uint16_t s_nerf_baseline_roi[NERF_ROI_SIZE][NERF_ROI_SIZE] = {0};
-static int s_baseline_sample_count = 0;
+// --- EMBEDDED LIGHTWEIGHT MODEL: HYBRID DIFFERENTIAL + NORMALIZED CHROMATICITY DETECTOR ---
+// Works across wide lighting conditions (indoor LED, 80,000 lux outdoor sunlight, shade, golden hour)
+#// --- EMBEDDED LIGHTWEIGHT MODEL: HYBRID DIFFERENTIAL + NORMALIZED CHROMATICITY DETECTOR ---
+// Works across wide lighting conditions (indoor LED, 80,000 lux outdoor sunlight, shade, golden hour)
+#define GRID_W 112
+#define GRID_H 108
+#define GRID_STEP 4
+#define ROI_X_START 180
+#define ROI_Y_START 140
+#define ROI_CENTER_X 400
+#define ROI_CENTER_Y 350
+#define ROI_RADIUS_X 210
+#define ROI_RADIUS_Y 200
+
+#define MAX_CANDIDATE_PTS 96
+static uint16_t s_cand_x[MAX_CANDIDATE_PTS];
+static uint16_t s_cand_y[MAX_CANDIDATE_PTS];
+
+typedef struct {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} baseline_pixel_t;
+
+static baseline_pixel_t s_baseline_grid[GRID_H][GRID_W];
 static bool s_baseline_ready = false;
+static bool s_byte_swap_needed = false;
+static bool s_swap_calibrated = false;
+static int64_t s_arm_settle_until_us = 0;
 static int64_t s_hit_cooldown_until_us = 0;
+static int s_initial_frame_warmup = 0;
 static uint32_t s_last_dart_pixel_count = 0;
 
 typedef struct {
@@ -400,8 +424,11 @@ static nerf_tracker_t g_nerf_tracker = {0};
 
 static int s_stat_frame_div = 0;
 
-static inline void rgb565_to_rgb888(uint16_t p, int *r, int *g, int *b)
+static inline void unpack_rgb565(uint16_t p, bool swap, int *r, int *g, int *b)
 {
+    if (swap) {
+        p = (uint16_t)((p >> 8) | (p << 8));
+    }
     int r5 = (p >> 11) & 0x1F;
     int g6 = (p >> 5) & 0x3F;
     int b5 = p & 0x1F;
@@ -410,72 +437,99 @@ static inline void rgb565_to_rgb888(uint16_t p, int *r, int *g, int *b)
     *b = (b5 << 3) | (b5 >> 2);
 }
 
-static void classify_roi_masses(const uint16_t *pixels, int width, bool swap_bytes,
-                                uint32_t *roi_total, uint32_t *dark_cnt,
-                                uint32_t *yellow_cnt, uint64_t *yellow_sum_x, uint64_t *yellow_sum_y,
-                                uint32_t *orange_cnt, uint64_t *orange_sum_x, uint64_t *orange_sum_y)
+// Light-invariant fluorescent yellow detection in normalized chromaticity space
+static inline bool is_light_invariant_yellow(int r, int g, int b)
 {
-    *roi_total = 0;
-    *dark_cnt = 0;
-    *yellow_cnt = 0;
-    *orange_cnt = 0;
-    *yellow_sum_x = 0;
-    *yellow_sum_y = 0;
-    *orange_sum_x = 0;
-    *orange_sum_y = 0;
+    int total = r + g + b + 1;
+    if (total < 60) {
+        return false;
+    }
 
-    for (int y = 130; y < 670; y += 2) {
-        int dy = y - 400;
-        int dy2 = dy * dy;
-        int row = y * width;
-        for (int x = 130; x < 670; x += 2) {
-            int dx = x - 400;
-            if (dx * dx + dy2 > 270 * 270) {
-                continue;
-            }
-            (*roi_total)++;
+    int rn = (r * 256) / total;
+    int gn = (g * 256) / total;
+    int bn = (b * 256) / total;
 
-            uint16_t p = pixels[row + x];
-            if (swap_bytes) {
-                p = (uint16_t)((p >> 8) | (p << 8));
-            }
-            int r, g, b;
-            rgb565_to_rgb888(p, &r, &g, &b);
+    int rg = r + g;
+    int b2 = 2 * b;
+    int yb = ((rg - b2) * 256) / (rg + b2 + 1);
 
-            int v_max = r;
-            if (g > v_max) v_max = g;
-            if (b > v_max) v_max = b;
+    // 1. Fluorescent yellow absorbs blue strongly (bn <= 48 across all lux levels from 150 to 100,000 lux)
+    // 2. Strong Yellow-Blue opponency (yb >= 105)
+    // 3. High red and green chroma (rn >= 85, gn >= 70)
+    // 4. Balanced red & green ratio (abs(rn - gn) <= 45)
+    // 5. Red clearly exceeds blue in absolute intensity
+    if (bn <= 48 && yb >= 105 && rn >= 85 && gn >= 70 && abs(rn - gn) <= 45 && r >= (b + 25)) {
+        return true;
+    }
+    return false;
+}
 
-            if (v_max < 115) {
-                (*dark_cnt)++;
-            }
+// Light-invariant fluorescent safety orange tip detection
+// Rejects red printed bullseye rings (where G ~ 0) by requiring genuine orange green chroma (gn >= 35, g >= 35)
+static inline bool is_light_invariant_orange(int r, int g, int b)
+{
+    int total = r + g + b + 1;
+    if (total < 60) {
+        return false;
+    }
 
-            int v_min = r;
-            if (g < v_min) v_min = g;
-            if (b < v_min) v_min = b;
-            int sat = (v_max > 0) ? (((v_max - v_min) * 255) / v_max) : 0;
+    int rn = (r * 256) / total;
+    int gn = (g * 256) / total;
+    int bn = (b * 256) / total;
 
-            // 1. High-accuracy Yellow Foam (fluorescent yellow absorbs blue, strong warm chroma)
-            bool is_yellow = (r >= 95 && g >= 55 && b <= 65 &&
-                              (r - b) >= 45 && (r + g) >= (2 * b + 70) &&
-                              sat >= 135 && r >= (g - 25));
+    // Safety orange dart tip: high red, moderate green (not pure red print where gn < 20), low blue
+    if (rn >= 130 && gn >= 35 && bn <= 45 && (rn - gn) >= 40 && r >= 110 && g >= 35) {
+        return true;
+    }
+    return false;
+}
 
-            // 2. High-accuracy Vivid Orange Tip
-            bool is_orange = (r >= 105 && g >= 30 && b <= 55 &&
-                              (r - g) >= 25 && (r - b) >= 45 &&
-                              sat >= 145);
-
-            if (is_yellow) {
-                (*yellow_cnt)++;
-                *yellow_sum_x += (uint64_t)x;
-                *yellow_sum_y += (uint64_t)y;
-            } else if (is_orange) {
-                (*orange_cnt)++;
-                *orange_sum_x += (uint64_t)x;
-                *orange_sum_y += (uint64_t)y;
+static void capture_baseline_grid(const uint16_t *pixels, int width)
+{
+    // Auto-detect byte swap on the first capture if not already determined
+    if (!s_swap_calibrated) {
+        int disp_no_swap = 0;
+        int disp_swap = 0;
+        for (int dy = -10; dy <= 10; dy += 2) {
+            int row = (ROI_CENTER_Y + dy) * width;
+            for (int dx = -10; dx <= 10; dx += 2) {
+                uint16_t p = pixels[row + ROI_CENTER_X + dx];
+                int r1, g1, b1, r2, g2, b2;
+                unpack_rgb565(p, false, &r1, &g1, &b1);
+                unpack_rgb565(p, true, &r2, &g2, &b2);
+                disp_no_swap += abs(r1 - g1) + abs(g1 - b1) + abs(b1 - r1);
+                disp_swap += abs(r2 - g2) + abs(g2 - b2) + abs(b2 - r2);
             }
         }
+        s_byte_swap_needed = (disp_swap < disp_no_swap);
+        s_swap_calibrated = true;
+        ESP_LOGI("NERF_CV", "Endianness auto-detected: swap_bytes = %s (disp_norm=%d, disp_swap=%d)",
+                 s_byte_swap_needed ? "TRUE" : "FALSE", disp_no_swap, disp_swap);
     }
+
+    // Populate baseline grid across the calibrated target ROI (excluding bottom yellow rail)
+    for (int gy = 0; gy < GRID_H; gy++) {
+        int y = ROI_Y_START + gy * GRID_STEP;
+        int dy = y - ROI_CENTER_Y;
+        int row = y * width;
+        for (int gx = 0; gx < GRID_W; gx++) {
+            int x = ROI_X_START + gx * GRID_STEP;
+            int dx = x - ROI_CENTER_X;
+            if ((400 * dx * dx + 441 * dy * dy) > 17640000) {
+                s_baseline_grid[gy][gx].r = 0;
+                s_baseline_grid[gy][gx].g = 0;
+                s_baseline_grid[gy][gx].b = 0;
+                continue;
+            }
+            uint16_t p = pixels[row + x];
+            int r, g, b;
+            unpack_rgb565(p, s_byte_swap_needed, &r, &g, &b);
+            s_baseline_grid[gy][gx].r = (uint8_t)r;
+            s_baseline_grid[gy][gx].g = (uint8_t)g;
+            s_baseline_grid[gy][gx].b = (uint8_t)b;
+        }
+    }
+    s_baseline_ready = true;
 }
 
 static void send_cv_stat(uint32_t yellow_cnt, uint32_t orange_cnt, float dark_pct, float cx, float cy)
@@ -483,17 +537,13 @@ static void send_cv_stat(uint32_t yellow_cnt, uint32_t orange_cnt, float dark_pc
     char stat[96];
     int n = snprintf(stat, sizeof(stat), "STAT,%.1f,%lu,%lu,%.0f,%.0f\n",
                      dark_pct,
-                     (unsigned long)(yellow_cnt * 4u),
-                     (unsigned long)(orange_cnt * 4u),
+                     (unsigned long)(yellow_cnt * 16u),
+                     (unsigned long)(orange_cnt * 16u),
                      cx, cy);
     if (n > 0) {
         uart_write_bytes(BRIDGE_UART_NUM, stat, n);
     }
 }
-
-static uint32_t s_pre_pop_chroma = 0;
-static float s_pre_pop_cx = 400.0f;
-static float s_pre_pop_cy = 400.0f;
 
 static bool detect_yellow_nerf_bullet(const uint16_t *pixels, int width, int height,
                                       float *out_x, float *out_y, bool *out_stuck, bool *out_optimal)
@@ -501,40 +551,119 @@ static bool detect_yellow_nerf_bullet(const uint16_t *pixels, int width, int hei
     (void)height;
     int64_t now_us = esp_timer_get_time();
 
+    // Check UART for commands from Pop ESP32 (e.g. "ARM" or "UP")
     uint8_t bridge_rx_buf[48];
     int rx_len = uart_read_bytes(BRIDGE_UART_NUM, bridge_rx_buf, sizeof(bridge_rx_buf) - 1, 0);
     if (rx_len > 0) {
         bridge_rx_buf[rx_len] = '\0';
         if (strstr((const char *)bridge_rx_buf, "ARM") != NULL) {
-            s_hit_cooldown_until_us = now_us + 750000ULL; // 750ms servo swing & settle window
+            s_arm_settle_until_us = esp_timer_get_time() + 750000ULL; // 750ms servo swing & mechanical settle
+            s_hit_cooldown_until_us = 0;
+            s_baseline_ready = false;
             memset(&g_nerf_tracker, 0, sizeof(g_nerf_tracker));
-            s_pre_pop_chroma = 0;
-            ESP_LOGI("NERF_CV", "[STANDALONE_CV] ARM received -> settling 750ms");
+            ESP_LOGI("NERF_CV", "[STANDALONE_CV] ARM received -> Target swinging up, settling 750ms");
             *out_stuck = false;
             *out_optimal = false;
             return false;
         }
     }
 
-    uint32_t roi_total = 0, dark_cnt = 0, yellow_cnt = 0, orange_cnt = 0;
-    uint64_t yellow_sum_x = 0, yellow_sum_y = 0, orange_sum_x = 0, orange_sum_y = 0;
-    classify_roi_masses(pixels, width, false, &roi_total, &dark_cnt,
-                        &yellow_cnt, &yellow_sum_x, &yellow_sum_y,
-                        &orange_cnt, &orange_sum_x, &orange_sum_y);
+    now_us = esp_timer_get_time();
 
-    if ((yellow_cnt + orange_cnt) < 20) {
-        uint32_t roi2 = 0, dark2 = 0, y2 = 0, o2 = 0;
-        uint64_t ysx2 = 0, ysy2 = 0, osx2 = 0, osy2 = 0;
-        classify_roi_masses(pixels, width, true, &roi2, &dark2, &y2, &ysx2, &ysy2, &o2, &osx2, &osy2);
-        if ((y2 + o2) > (yellow_cnt + orange_cnt)) {
-            roi_total = roi2;
-            dark_cnt = dark2;
-            yellow_cnt = y2;
-            orange_cnt = o2;
-            yellow_sum_x = ysx2;
-            yellow_sum_y = ysy2;
-            orange_sum_x = osx2;
-            orange_sum_y = osy2;
+    // Cooldown active after a confirmed hit / while target is dropping
+    if (s_hit_cooldown_until_us > 0) {
+        if (now_us < s_hit_cooldown_until_us) {
+            *out_stuck = false;
+            *out_optimal = false;
+            return false;
+        }
+        s_hit_cooldown_until_us = 0;
+        s_baseline_ready = false;
+        memset(&g_nerf_tracker, 0, sizeof(g_nerf_tracker));
+        const char *clear_msg = "CLEAR,1\n";
+        uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
+        ESP_LOGI("NERF_CV", "[STANDALONE_CV] Hit cooldown expired -> Ready for next ARM");
+    }
+
+    // During 750ms pop-up swing/settle, wait until target is fully upright
+    if (s_arm_settle_until_us > 0) {
+        if (now_us < s_arm_settle_until_us) {
+            *out_stuck = false;
+            *out_optimal = false;
+            return false;
+        }
+        // Exactly 750ms expired -> target is stationary and upright!
+        s_arm_settle_until_us = 0;
+        capture_baseline_grid(pixels, width);
+        memset(&g_nerf_tracker, 0, sizeof(g_nerf_tracker));
+        const char *clear_msg = "CLEAR,1\n";
+        uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
+        ESP_LOGI("NERF_CV", "[STANDALONE_CV] Target Armed & Stationary! Pre-shot baseline grid captured.");
+    }
+
+    // Warmup auto-baseline for initial standalone testing (if no ARM received yet)
+    if (!s_baseline_ready) {
+        if (++s_initial_frame_warmup >= 25) {
+            capture_baseline_grid(pixels, width);
+            ESP_LOGI("NERF_CV", "[STANDALONE_CV] Initial baseline grid captured (warmup ready).");
+        } else {
+            *out_stuck = false;
+            *out_optimal = false;
+            return false;
+        }
+    }
+
+    // --- FULL DIFFERENTIAL + CHROMATICITY SCAN ACROSS STEP-4 GRID ---
+    uint32_t yellow_cnt = 0, orange_cnt = 0, dark_cnt = 0, roi_total = 0;
+    uint64_t sum_x = 0, sum_y = 0;
+    int cand_count = 0;
+
+    for (int gy = 0; gy < GRID_H; gy++) {
+        int y = ROI_Y_START + gy * GRID_STEP;
+        int dy = y - ROI_CENTER_Y;
+        int row = y * width;
+        for (int gx = 0; gx < GRID_W; gx++) {
+            int x = ROI_X_START + gx * GRID_STEP;
+            int dx = x - ROI_CENTER_X;
+            if ((400 * dx * dx + 441 * dy * dy) > 17640000) {
+                continue;
+            }
+            roi_total++;
+
+            uint16_t p = pixels[row + x];
+            int r, g, b;
+            unpack_rgb565(p, s_byte_swap_needed, &r, &g, &b);
+
+            int v_max = r;
+            if (g > v_max) v_max = g;
+            if (b > v_max) v_max = b;
+            if (v_max < 90) {
+                dark_cnt++;
+            }
+
+            // Differential test against upright baseline
+            int br = s_baseline_grid[gy][gx].r;
+            int bg = s_baseline_grid[gy][gx].g;
+            int bb = s_baseline_grid[gy][gx].b;
+            int delta = abs(r - br) + abs(g - bg) + abs(b - bb);
+
+            // A valid hit point MUST have a physical appearance delta on the card (delta >= 35 rejects sensor thermal noise)
+            if (delta >= 35) {
+                bool is_y = is_light_invariant_yellow(r, g, b);
+                bool is_o = is_light_invariant_orange(r, g, b);
+
+                if (is_y || is_o) {
+                    if (is_y) yellow_cnt++;
+                    if (is_o) orange_cnt++;
+                    sum_x += (uint64_t)x;
+                    sum_y += (uint64_t)y;
+                    if (cand_count < MAX_CANDIDATE_PTS) {
+                        s_cand_x[cand_count] = (uint16_t)x;
+                        s_cand_y[cand_count] = (uint16_t)y;
+                        cand_count++;
+                    }
+                }
+            }
         }
     }
 
@@ -545,55 +674,40 @@ static bool detect_yellow_nerf_bullet(const uint16_t *pixels, int width, int hei
     }
 
     float dark_pct = ((float)dark_cnt * 100.0f) / (float)roi_total;
-    float cx = 400.0f;
-    float cy = 400.0f;
+    float cx = (float)ROI_CENTER_X;
+    float cy = (float)ROI_CENTER_Y;
     uint32_t chroma = yellow_cnt + orange_cnt;
-    if (chroma > 0) {
-        cx = (float)(yellow_sum_x + orange_sum_x) / (float)chroma;
-        cy = (float)(yellow_sum_y + orange_sum_y) / (float)chroma;
+    float mean_disp = 999.0f;
+
+    if (chroma >= 8 && cand_count >= 8) {
+        cx = (float)sum_x / (float)chroma;
+        cy = (float)sum_y / (float)chroma;
+
+        float sum_disp = 0;
+        for (int i = 0; i < cand_count; i++) {
+            sum_disp += (fabsf((float)s_cand_x[i] - cx) + fabsf((float)s_cand_y[i] - cy));
+        }
+        mean_disp = sum_disp / (float)cand_count;
     }
 
+    // Send live telemetry to Pop ESP32 / Laptop dashboard every 2 frames
+    // Suppress random twitching: only broadcast coordinates when a compact cluster exists
     if (++s_stat_frame_div >= 2) {
         s_stat_frame_div = 0;
-        send_cv_stat(yellow_cnt, orange_cnt, dark_pct, cx, cy);
-    }
-
-    // During 750ms pop-up swing/settle, learn any pre-existing background baseline
-    if (s_hit_cooldown_until_us > 0) {
-        if (now_us < s_hit_cooldown_until_us) {
-            if (chroma > s_pre_pop_chroma) {
-                s_pre_pop_chroma = chroma;
-                s_pre_pop_cx = cx;
-                s_pre_pop_cy = cy;
-            }
-            *out_stuck = false;
-            *out_optimal = false;
-            return false;
-        }
-        s_hit_cooldown_until_us = 0;
-        memset(&g_nerf_tracker, 0, sizeof(g_nerf_tracker));
-        const char *clear_msg = "CLEAR,1\n";
-        uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
-        ESP_LOGI("NERF_CV", "[STANDALONE_CV] Armed! Baseline pre-pop chroma: %lu at (%.0f,%.0f)",
-                 (unsigned long)s_pre_pop_chroma, s_pre_pop_cx, s_pre_pop_cy);
-    }
-
-    // Check if current observation is merely the old static baseline that was already present
-    bool is_static_background = false;
-    if (s_pre_pop_chroma > 0) {
-        float d_dist = hypotf(cx - s_pre_pop_cx, cy - s_pre_pop_cy);
-        if (d_dist <= 30.0f && chroma <= (s_pre_pop_chroma + 60)) {
-            is_static_background = true;
+        if (chroma >= 8 && mean_disp <= 35.0f) {
+            send_cv_stat(yellow_cnt, orange_cnt, dark_pct, cx, cy);
+        } else {
+            send_cv_stat(0, 0, dark_pct, (float)ROI_CENTER_X, (float)ROI_CENTER_Y);
         }
     }
 
-    // Valid dart requires:
-    // 1. Minimum 60 sampled points (~240 full pixels)
-    // 2. Minimum 30 yellow foam points
-    // 3. Not the pre-existing static baseline
-    bool is_valid_dart = (chroma >= 60 && yellow_cnt >= 30 && !is_static_background);
-
-    uint32_t equiv_1x1_pixels = chroma * 4u;
+    // --- MULTI-FRAME CLUSTERING & TEMPORAL PERSISTENCE FILTER ---
+    // Dart candidate requires:
+    // 1. Minimum 10 step-4 candidate points (~160 full pixels)
+    // 2. Minimum 6 yellow foam points (~96 full pixels)
+    // 3. Compact spatial cluster: mean dispersion <= 28.0 px (rejects scattered ambient noise)
+    bool is_valid_dart = (chroma >= 10 && yellow_cnt >= 6 && mean_disp <= 28.0f);
+    uint32_t equiv_1x1_pixels = chroma * 16u;
     s_last_dart_pixel_count = equiv_1x1_pixels;
 
     if (is_valid_dart) {
@@ -608,12 +722,17 @@ static bool detect_yellow_nerf_bullet(const uint16_t *pixels, int width, int hei
         g_nerf_tracker.last_x = cx;
         g_nerf_tracker.last_y = cy;
 
-        // Strict 3-frame persistence (~150ms) to reject all glitches & shadows!
-        bool stuck = (g_nerf_tracker.stable_frames >= 3);
+        // Persists for 2 consecutive frames (~100-150ms) -> Confirmed stuck hit!
+        bool stuck = (g_nerf_tracker.stable_frames >= 2);
         g_nerf_tracker.is_stuck = stuck;
-        g_nerf_tracker.in_optimal_zone = stuck;
+        
+        // Optimal zone: center radius <= 80 px (matches inner rings)
+        float d_center = hypotf(cx - (float)ROI_CENTER_X, cy - (float)ROI_CENTER_Y);
+        bool in_optimal = (d_center <= 80.0f);
+        g_nerf_tracker.in_optimal_zone = in_optimal;
+
         *out_stuck = stuck;
-        *out_optimal = stuck;
+        *out_optimal = in_optimal;
 
         if (stuck) {
             char hit_telemetry[64];
@@ -622,10 +741,10 @@ static bool detect_yellow_nerf_bullet(const uint16_t *pixels, int width, int hei
             uart_write_bytes(BRIDGE_UART_NUM, hit_telemetry, hlen);
             const char *drop_cmd = "DOWN,1\n";
             uart_write_bytes(BRIDGE_UART_NUM, drop_cmd, strlen(drop_cmd));
-            ESP_LOGI("NERF_CV", "[STANDALONE_CV] HIT CONFIRMED (%.1f,%.1f) y=%lu o=%lu px=%lu",
-                     cx, cy, (unsigned long)yellow_cnt, (unsigned long)orange_cnt, (unsigned long)equiv_1x1_pixels);
+            ESP_LOGI("NERF_CV", "[STANDALONE_CV] HIT CONFIRMED (%.1f,%.1f) disp=%.1f y=%lu o=%lu px=%lu",
+                     cx, cy, mean_disp, (unsigned long)(yellow_cnt * 16u), (unsigned long)(orange_cnt * 16u),
+                     (unsigned long)equiv_1x1_pixels);
             s_hit_cooldown_until_us = now_us + 3000000ULL;
-            s_pre_pop_chroma = 0;
         }
         return true;
     }
@@ -858,96 +977,14 @@ static void camera_stream_task(void *arg)
                 }
 
                 // --- STANDALONE COMPUTER VISION PIPELINE ---
-                int best_x = -1;
-                int best_y = -1;
-                int best_score = -100;
-                
                 uint16_t *pixels = (uint16_t *)frame_ptr;
-                // Scan every 2nd pixel for speed (scans 160,000 pixels in ~1ms)
-                for (int y = 4; y < 796; y += 2) {
-                    for (int x = 4; x < 796; x += 2) {
-                        uint16_t pixel = pixels[y * 800 + x];
-                        int r = (pixel >> 11) & 0x1F;
-                        int g = (pixel >> 5) & 0x3F;
-                        int b = pixel & 0x1F;
-                        
-                        int g_norm = g >> 1; // Normalize green (6-bit) to 5-bit
-                        int score = r * 2 - g_norm - b; // High-pass red difference
-                        
-                        // Adaptive thresholding: Use threshold of 12 in white circle (high green/blue) and 18 in dark/background areas
-                        int thresh = (g_norm > 15 && b > 15) ? 12 : 18;
-                        if (score >= thresh) {
-                            int relative_score = score - thresh;
-                            if (relative_score > best_score) {
-                                best_score = relative_score;
-                                best_x = x;
-                                best_y = y;
-                            }
-                        }
-                    }
-                }
-                
-                bool laser_found = (best_score >= 0); // Exceeded adaptive threshold if relative_score >= 0
-                double laser_x = best_x;
-                double laser_y = best_y;
-                
-                if (laser_found) {
-                    // Refine coordinates using 9x9 centroid around the peak
-                    double sum_x = 0;
-                    double sum_y = 0;
-                    double sum_w = 0;
-                    for (int dy = -4; dy <= 4; dy++) {
-                        for (int dx = -4; dx <= 4; dx++) {
-                            int px = best_x + dx;
-                            int py = best_y + dy;
-                            if (px >= 0 && px < 800 && py >= 0 && py < 800) {
-                                uint16_t p = pixels[py * 800 + px];
-                                int r = (p >> 11) & 0x1F;
-                                int g = (p >> 5) & 0x3F;
-                                int b = p & 0x1F;
-                                int g_norm = g >> 1;
-                                int w = r * 2 - g_norm - b;
-                                int min_w = (g_norm > 15 && b > 15) ? 8 : 10;
-                                if (w >= min_w) {
-                                    sum_x += px * w;
-                                    sum_y += py * w;
-                                    sum_w += w;
-                                }
-                            }
-                        }
-                    }
-                    if (sum_w > 0) {
-                        laser_x = sum_x / sum_w;
-                        laser_y = sum_y / sum_w;
-                    }
-                }
-                
-                // Homography mapping and scoring calculations
-                float target_x = 0.0f;
-                float target_y = 0.0f;
-                float distance = 0.0f;
-                uint8_t ring = 0;
-                uint8_t zone = 0;
-                
-                bool valid_laser_on_card = false;
-                // Legacy red laser fallback disabled: ONLY 4-Stage Yellow Nerf Dart + Orange Tip sets valid_laser_on_card!
 
-                // --- RUN EMBEDDED YELLOW NERF BULLET DETECTOR ---
+                // Run Embedded Light-Invariant Yellow Nerf Bullet Detector
                 float nerf_x = 0.0f, nerf_y = 0.0f;
                 bool nerf_stuck = false, nerf_optimal = false;
                 bool nerf_detected = detect_yellow_nerf_bullet(pixels, 800, 800, &nerf_x, &nerf_y, &nerf_stuck, &nerf_optimal);
 
                 if (nerf_detected && nerf_stuck) {
-                    valid_laser_on_card = true;
-                    laser_x = nerf_x;
-                    laser_y = nerf_y;
-                    if (nerf_optimal) {
-                        zone = 1; // Green Optimal Zone
-                        ring = 11; // 10X Bullseye
-                    } else {
-                        zone = 2; // Outer Zone
-                        ring = 8;
-                    }
                     static int64_t last_nerf_log = 0;
                     int64_t now_us = esp_timer_get_time();
                     if (now_us - last_nerf_log > 1000000) {
