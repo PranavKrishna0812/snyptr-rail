@@ -681,8 +681,11 @@
               <button onclick="handlePopCommand(1, 5.0)" class="ref-btn ref-btn-accent" style="flex: 1; padding: 6px; font-size: 11px; font-weight: 800;" title="Shortcut: 0 - Pop Target 1 for 5 seconds">
                 POP TARGET 1 (5s) [0]
               </button>
-              <button onclick="takeCameraSnapshot()" class="ref-btn" style="flex: 1; padding: 6px; font-size: 10px; background-color: #384236;" title="Capture high-resolution still snapshot from camera">
-                CAPTURE SNAPSHOT
+              <button onclick="triggerManualHitOverride()" class="ref-btn" style="flex: 1; padding: 6px; font-size: 11px; font-weight: 800; background-color: #1e3321; border: 1px solid #2cff55; color: #2cff55;" title="Keyboard Shortcut: [`] - Lower target manually & randomly announce HIT">
+                🎯 MANUAL HIT [`]
+              </button>
+              <button onclick="takeCameraSnapshot()" class="ref-btn" style="flex: 0.9; padding: 6px; font-size: 10px; background-color: #384236;" title="Capture high-resolution still snapshot from camera">
+                SNAPSHOT
               </button>
             </div>
 
@@ -1083,7 +1086,10 @@
 
       const key = e.key;
 
-      if (key === 'ArrowRight' || key === 'd' || key === 'D') {
+      if (key === '`' || key === '~' || e.code === 'Backquote') {
+        e.preventDefault();
+        triggerManualHitOverride();
+      } else if (key === 'ArrowRight' || key === 'd' || key === 'D') {
         e.preventDefault();
         if (!activeKeys.ArrowRight) {
           activeKeys.ArrowRight = true;
@@ -2908,6 +2914,69 @@
       }
     }
     setInterval(pollWifiTelemetry, 350);
+
+    // --- MANUAL HIT OVERRIDE (` key or button) ---
+    // Manually drops the target and randomly announces that the target is hit!
+    function triggerManualHitOverride() {
+      // 1. Reset debounce guard so manual override always triggers immediately
+      stuckBulletAcknowledged = false;
+
+      // 2. Generate random impact location around bullseye (160x160 viewport)
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 5 + Math.random() * 18; // 5 to 23 px from center
+      const cx = Math.round(80 + Math.cos(angle) * radius);
+      const cy = Math.round(75 + Math.sin(angle) * radius);
+      const distMm = (radius / 80.0) * 25.0;
+
+      // 3. Immediately drop the physical target via all available channels
+      foldTarget(1);
+      fetch("http://127.0.0.1:8001/drop", { method: "POST" }).catch(() => {});
+
+      // 4. Trigger UI hit effects, optimal circle pulse, and dot
+      handleNerfBulletStuck(cx, cy, distMm, true, "MANUAL HIT [`]");
+
+      // 5. Randomly speak and display that the target is hit!
+      speakRandomHit();
+
+      logTerm(`[Manual Override (\`)] Target LOWERED manually! Announced random HIT at (${cx}, ${cy}).`);
+    }
+
+    function speakRandomHit() {
+      const phrases = [
+        "Target hit! Bullseye!",
+        "Confirmed hit on Target 1! Target down!",
+        "Direct hit! Excellent shot!",
+        "Target neutralized! Clean impact!",
+        "Hit confirmed! 10X bullseye!",
+        "Target down! Direct hit!",
+        "Target 1 hit! Dropping target!"
+      ];
+      const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+
+      // Audio Text-to-Speech callout via Web Speech API
+      if ('speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(phrase);
+          utter.rate = 1.05;
+          utter.pitch = 1.0;
+          utter.volume = 1.0;
+          window.speechSynthesis.speak(utter);
+        } catch(err) {
+          console.warn("Speech error:", err);
+        }
+      }
+
+      // Visual HUD Banner display
+      const banner = document.getElementById("nerfOptimalHudBanner");
+      if (banner) {
+        banner.style.display = "block";
+        banner.innerText = `🎯 ${phrase.toUpperCase()} // MANUAL OVERRIDE [\`]`;
+        banner.style.borderColor = "#2cff55";
+        banner.style.color = "#2cff55";
+        banner.style.boxShadow = "0 0 25px rgba(44, 255, 85, 0.9)";
+      }
+    }
 
     // --- TERMINAL LOGGING ---
     function logTerm(msg) {
