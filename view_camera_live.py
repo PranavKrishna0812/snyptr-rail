@@ -114,7 +114,80 @@ class SharedMonitorState:
         self.last_hit_timestamp = 0.0
         self.permanent_up = False
 
+        # Interactive Digital Zoom & Pan (1.0x to 4.0x)
+        self.zoom = 1.0           # Current zoom factor
+        self.zoom_cx = 400.0      # Pan center X (0 to 800)
+        self.zoom_cy = 400.0      # Pan center Y (0 to 800)
+        self.is_dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.drag_orig_cx = 400.0
+        self.drag_orig_cy = 400.0
+
 g_state = SharedMonitorState()
+
+def adjust_zoom(delta, mouse_x=None, mouse_y=None):
+    with g_state.lock:
+        old_zoom = g_state.zoom
+        new_zoom = round(max(1.0, min(4.0, old_zoom + delta)), 2)
+        if mouse_x is not None and mouse_y is not None and new_zoom > 1.0:
+            # Shift center towards mouse cursor in frame coordinates
+            crop_w = 800.0 / old_zoom
+            crop_h = 800.0 / old_zoom
+            x1 = max(0.0, min(800.0 - crop_w, g_state.zoom_cx - crop_w / 2.0))
+            y1 = max(0.0, min(800.0 - crop_h, g_state.zoom_cy - crop_h / 2.0))
+            cursor_frame_x = x1 + (float(mouse_x) / 800.0) * crop_w
+            cursor_frame_y = y1 + (float(mouse_y) / 800.0) * crop_h
+            # Blend 40% towards cursor position
+            g_state.zoom_cx = max(0.0, min(800.0, g_state.zoom_cx * 0.6 + cursor_frame_x * 0.4))
+            g_state.zoom_cy = max(0.0, min(800.0, g_state.zoom_cy * 0.6 + cursor_frame_y * 0.4))
+        g_state.zoom = new_zoom
+        if new_zoom == 1.0:
+            g_state.zoom_cx = 400.0
+            g_state.zoom_cy = 400.0
+    print(f"\n[🔍 ZOOM] Level: {new_zoom:.2f}x | Center: ({g_state.zoom_cx:.0f}, {g_state.zoom_cy:.0f})")
+
+def reset_zoom():
+    with g_state.lock:
+        g_state.zoom = 1.0
+        g_state.zoom_cx = 400.0
+        g_state.zoom_cy = 400.0
+    print("\n[🔍 ZOOM] Reset to 1.0x (Fit Full Frame)")
+
+def pan_zoom(dx, dy):
+    with g_state.lock:
+        if g_state.zoom <= 1.0:
+            return
+        step = 45.0 / g_state.zoom
+        g_state.zoom_cx = max(0.0, min(800.0, g_state.zoom_cx + dx * step))
+        g_state.zoom_cy = max(0.0, min(800.0, g_state.zoom_cy + dy * step))
+
+def on_mouse_event(event, x, y, flags, param):
+    if event == cv2.EVENT_LBUTTONDOWN:
+        with g_state.lock:
+            g_state.is_dragging = True
+            g_state.drag_start_x = x
+            g_state.drag_start_y = y
+            g_state.drag_orig_cx = g_state.zoom_cx
+            g_state.drag_orig_cy = g_state.zoom_cy
+    elif event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
+        with g_state.lock:
+            if g_state.is_dragging and g_state.zoom > 1.0:
+                dx = x - g_state.drag_start_x
+                dy = y - g_state.drag_start_y
+                scale = 1.0 / g_state.zoom
+                g_state.zoom_cx = max(0.0, min(800.0, g_state.drag_orig_cx - dx * scale))
+                g_state.zoom_cy = max(0.0, min(800.0, g_state.drag_orig_cy - dy * scale))
+    elif event == cv2.EVENT_LBUTTONUP:
+        with g_state.lock:
+            g_state.is_dragging = False
+    elif event == cv2.EVENT_LBUTTONDBLCLK:
+        reset_zoom()
+    elif event == cv2.EVENT_MOUSEWHEEL:
+        if flags > 0:
+            adjust_zoom(0.25, x, y)
+        else:
+            adjust_zoom(-0.25, x, y)
 
 def wifi_telemetry_thread_func():
     """Polls http://192.168.4.1/telemetry in background thread."""
@@ -297,6 +370,9 @@ def render_tactical_canvas():
         port = g_state.serial_port
         wifi_conn = g_state.wifi_connected
         perm_up = g_state.permanent_up
+        zoom = g_state.zoom
+        zoom_cx = g_state.zoom_cx
+        zoom_cy = g_state.zoom_cy
 
     # If no physical camera frame received yet, create an 800x800 dark canvas
     if frame is None:
@@ -313,6 +389,20 @@ def render_tactical_canvas():
                     (90, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, "Connect ESP32-P4 USB cable & flash standalone firmware.",
                     (110, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 180, 160), 1, cv2.LINE_AA)
+
+    raw_frame_full = frame.copy()
+
+    # Apply Interactive Digital Zoom (Crop & Scale)
+    crop_w = int(800.0 / zoom)
+    crop_h = int(800.0 / zoom)
+    x1 = max(0, min(800 - crop_w, int(zoom_cx - crop_w / 2.0)))
+    y1 = max(0, min(800 - crop_h, int(zoom_cy - crop_h / 2.0)))
+    x2 = x1 + crop_w
+    y2 = y1 + crop_h
+
+    if zoom > 1.0:
+        cropped = frame[y1:y2, x1:x2]
+        frame = cv2.resize(cropped, (800, 800), interpolation=cv2.INTER_LINEAR)
 
     # 1. Full-Frame Active Target Region Corners (Corner Brackets)
     if hit:
@@ -351,11 +441,27 @@ def render_tactical_canvas():
 
     # 2. Draw Hit / Detected Projectile Indicator (ONLY WHEN CONFIRMED HIT)
     if hit:
-        hx, hy = max(20, min(780, hit_x)), max(20, min(780, hit_y))
-        cv2.circle(frame, (hx, hy), 30, (0, 0, 255), 3, cv2.LINE_AA)
-        cv2.circle(frame, (hx, hy), 6, (0, 200, 255), -1, cv2.LINE_AA)
-        cv2.putText(frame, f"IMPACT ({hx},{hy})", (hx + 35, hy + 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+        screen_hx = int((hit_x - x1) * (800.0 / crop_w))
+        screen_hy = int((hit_y - y1) * (800.0 / crop_h))
+        if 0 <= screen_hx <= 800 and 0 <= screen_hy <= 800:
+            circle_r = max(18, min(80, int(30 * zoom)))
+            cv2.circle(frame, (screen_hx, screen_hy), circle_r, (0, 0, 255), 3, cv2.LINE_AA)
+            cv2.circle(frame, (screen_hx, screen_hy), 6, (0, 200, 255), -1, cv2.LINE_AA)
+            cv2.putText(frame, f"IMPACT ({hit_x},{hit_y})", (screen_hx + 35, screen_hy + 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
+
+    # 2b. Mini-Map Radar Thumbnail (Visible when Zoomed In)
+    if zoom > 1.0:
+        mm_size = 90
+        thumb = cv2.resize(raw_frame_full, (mm_size, mm_size))
+        rx1 = int(x1 * mm_size / 800.0)
+        ry1 = int(y1 * mm_size / 800.0)
+        rx2 = int(x2 * mm_size / 800.0)
+        ry2 = int(y2 * mm_size / 800.0)
+        cv2.rectangle(thumb, (rx1, ry1), (rx2, ry2), (0, 255, 60), 2)
+        frame[630:720, 695:785] = thumb
+        cv2.rectangle(frame, (695, 630), (785, 720), (0, 220, 255), 1)
+        cv2.putText(frame, "RADAR", (698, 624), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 220, 255), 1, cv2.LINE_AA)
 
     # 3. Tactical Header Banner (Top HUD)
     cv2.rectangle(frame, (0, 0), (800, 64), (16, 20, 16), -1)
@@ -372,8 +478,16 @@ def render_tactical_canvas():
 
     # Latency & FPS Badge
     perf_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | UART: {port if serial_conn else 'WAITING'}"
-    cv2.putText(frame, perf_text, (240, 51),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200) if serial_conn else (150, 150, 150), 1, cv2.LINE_AA)
+    cv2.putText(frame, perf_text, (230, 51),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 200) if serial_conn else (150, 150, 150), 1, cv2.LINE_AA)
+
+    # Zoom Level Pill (Top HUD)
+    zoom_color = (0, 255, 255) if zoom > 1.0 else (120, 150, 120)
+    zoom_label = f"ZOOM: {zoom:.2f}x"
+    cv2.rectangle(frame, (445, 36), (540, 56), (28, 36, 28), -1)
+    cv2.rectangle(frame, (445, 36), (540, 56), zoom_color, 1)
+    cv2.putText(frame, zoom_label, (451, 51),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.41, zoom_color, 1, cv2.LINE_AA)
 
     # Permanent Up Pill (Top Right)
     perm_color = (0, 255, 255) if perm_up else (80, 100, 80)
@@ -397,9 +511,9 @@ def render_tactical_canvas():
     cv2.putText(frame, diag_text1, (18, 760),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 240, 220), 1, cv2.LINE_AA)
 
-    controls_text = "CONTROLS:  [u] Pop Up & Arm  |  [d] Lower  |  [p] Perm Up  |  [`] Hit Override  |  [q] Quit"
+    controls_text = "CONTROLS: [u] Up  |  [d] Down  |  [p] Perm Up  |  [+/-/Scroll] Zoom  |  [Drag] Pan  |  [0/r] Reset Zoom  |  [q] Quit"
     cv2.putText(frame, controls_text, (18, 785),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.43, (140, 180, 140), 1, cv2.LINE_AA)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.40, (140, 180, 140), 1, cv2.LINE_AA)
 
     return frame
 
@@ -410,9 +524,13 @@ def main():
     print(f"Connecting to ESP32-P4 Serial Stream on {DEFAULT_COM_PORT} @ {DEFAULT_BAUD} baud...")
     print(f"Connecting to Pop-Up ESP32 Wi-Fi Hotspot at {ESP32_WIFI_URL}...")
     print("Controls:")
-    print("  [u] or [0]          : Pop Up & Arm Target (UP,1)")
+    print("  [u]                 : Pop Up & Arm Target (UP,1)")
     print("  [d]                 : Lower Target (DOWN,1)")
     print("  [p]                 : Toggle Permanent Up Mode (Target stays upright on hit)")
+    print("  [+] / [-] or [z/x]  : Zoom Camera IN / OUT (1.0x to 4.0x)")
+    print("  [Mouse Scroll]      : Smooth Zoom In / Out at cursor position")
+    print("  [Mouse Drag / WASD] : Pan camera view when zoomed in")
+    print("  [0] or [r] / DblClk : Reset Zoom to 1.0x (Full Frame)")
     print("  [`] (Backtick)      : Manual Hit Override (random voice announcement)")
     print("  [q] or [Esc]        : Exit Monitor")
     print("=" * 78, flush=True)
@@ -427,6 +545,7 @@ def main():
         window_name = "SNYPTR-RAIL // Live Camera Feed"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, 800, 800)
+        cv2.setMouseCallback(window_name, on_mouse_event)
 
     try:
         while True:
@@ -440,7 +559,7 @@ def main():
 
                 if ch_str in ['`', '~']:
                     trigger_manual_hit_override()
-                elif ch_str in ['u', '0']:
+                elif ch_str in ['u']:
                     print("\n[CMD] Raising & Arming Target 1 (UP,1)...")
                     send_cmd("UP,1")
                 elif ch_str == 'd':
@@ -448,6 +567,12 @@ def main():
                     send_cmd("DOWN,1")
                 elif ch_str == 'p':
                     toggle_permanent_up()
+                elif ch_str in ['+', '=', 'z']:
+                    adjust_zoom(0.25)
+                elif ch_str in ['-', '_', 'x']:
+                    adjust_zoom(-0.25)
+                elif ch_str in ['0', 'r']:
+                    reset_zoom()
                 elif ch_str == 'q':
                     print("\nQuit requested.")
                     break
@@ -460,14 +585,28 @@ def main():
                 if key == ord('q') or key == 27: # 'q' or ESC
                     print("\nQuit key pressed.")
                     break
-                elif key == ord('u') or key == ord('0'):
+                elif key in [ord('u'), ord('U')]:
                     print("\n[CMD] Raising & Arming Target 1 (UP,1)...")
                     send_cmd("UP,1")
-                elif key == ord('d'):
+                elif key in [ord('d'), ord('D')]:
                     print("\n[CMD] Lowering Target 1 (DOWN,1)...")
                     send_cmd("DOWN,1")
                 elif key in [ord('p'), ord('P')]:
                     toggle_permanent_up()
+                elif key in [ord('+'), ord('='), ord('z'), ord('Z')]:
+                    adjust_zoom(0.25)
+                elif key in [ord('-'), ord('_'), ord('x'), ord('X')]:
+                    adjust_zoom(-0.25)
+                elif key in [ord('0'), ord('r'), ord('R')]:
+                    reset_zoom()
+                elif key in [ord('w'), ord('W')]:
+                    pan_zoom(0, -1)
+                elif key in [ord('s'), ord('S')]:
+                    pan_zoom(0, 1)
+                elif key in [ord('a'), ord('A')]:
+                    pan_zoom(-1, 0)
+                elif key in [ord('e'), ord('E')]:
+                    pan_zoom(1, 0)
                 elif key in [ord('`'), ord('~'), ord(' ')]:
                     trigger_manual_hit_override()
             else:

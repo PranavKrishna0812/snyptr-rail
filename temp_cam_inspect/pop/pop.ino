@@ -138,6 +138,7 @@ void executeCommand(String line, bool fromP4 = false) {
   // Permanent UP mode toggle / commands
   if (line == "PERM_UP,1" || line == "PERM_UP_ON" || line == "PERM_UP") {
     g_permanentUp = true;
+    Serial2.println("PERM_UP,1");
     if (targetStateStr != "UP") {
       g_hitActive = false;
       targetStateStr = "UP";
@@ -145,23 +146,29 @@ void executeCommand(String line, bool fromP4 = false) {
       moveServoSmooth(0, SERVO_UP, 3);
       delay(400);
       Serial2.println("ARM,1");
+    } else {
+      Serial2.println("ARM,1");
     }
     Serial.println("PERM_UP_CONFIRMED,1");
     return;
   }
   if (line == "PERM_UP,0" || line == "PERM_UP_OFF") {
     g_permanentUp = false;
+    Serial2.println("PERM_UP,0");
     Serial.println("PERM_UP_CONFIRMED,0");
     return;
   }
   if (line == "TOGGLE_PERM_UP") {
     g_permanentUp = !g_permanentUp;
-    if (g_permanentUp && targetStateStr != "UP") {
-      g_hitActive = false;
-      targetStateStr = "UP";
-      g_targetUpTimestampMs = millis();
-      moveServoSmooth(0, SERVO_UP, 3);
-      delay(400);
+    Serial2.println(g_permanentUp ? "PERM_UP,1" : "PERM_UP,0");
+    if (g_permanentUp) {
+      if (targetStateStr != "UP") {
+        g_hitActive = false;
+        targetStateStr = "UP";
+        g_targetUpTimestampMs = millis();
+        moveServoSmooth(0, SERVO_UP, 3);
+        delay(400);
+      }
       Serial2.println("ARM,1");
     }
     Serial.println(g_permanentUp ? "PERM_UP_CONFIRMED,1" : "PERM_UP_CONFIRMED,0");
@@ -220,6 +227,13 @@ void executeCommand(String line, bool fromP4 = false) {
     return;
   }
 
+  // Real-time ARMED confirmation from P4
+  if (line.startsWith("ARMED")) {
+    g_hitActive = false;
+    g_diagDetectorState = "ARMED";
+    return;
+  }
+
   // 2. Real-time Diagnostic Telemetry from P4: "DIAG,state,delta,color,motion,spanX,spanY,confidence,latency"
   if (line.startsWith("DIAG,")) {
     g_lastP4StatMs = millis();
@@ -273,7 +287,7 @@ void executeCommand(String line, bool fromP4 = false) {
   // 5. Lower Target: "DOWN,1" or "DOWN,ALL" (from Wi-Fi Dashboard / USB / ESP-NOW)
   else if (line.startsWith("DOWN,")) {
     g_permanentUp = false; // Manual down exits permanent up mode
-    String idStr = line.substring(5);
+    Serial2.println("PERM_UP,0"); // Forward disarm to P4!
     Serial2.println("DISARM,1"); // Immediately disarm P4 detection!
     if (idStr == "ALL") {
       for (int channel = 0; channel < 7; channel++) {

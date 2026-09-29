@@ -428,6 +428,7 @@ static detector_state_t g_detector_state = DETECTOR_STATE_DOWN;
 static bool s_ref_ready = false;
 static bool s_byte_swap_needed = false;
 static bool s_swap_calibrated = false;
+static bool s_perm_up_mode = false; // Permanent UP mode: target stays upright on hit and auto-rearms
 
 static int64_t s_hit_cooldown_until_us = 0;
 static int s_ref_accum_frames = 0;
@@ -473,31 +474,58 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
     (void)height;
     int64_t frame_start_us = esp_timer_get_time();
 
-    // 1. Process UART commands from Pop ESP32 (Non-blocking)
-    uint8_t rx_buf[48];
-    int rx_len = uart_read_bytes(BRIDGE_UART_NUM, rx_buf, sizeof(rx_buf) - 1, 0);
-    if (rx_len > 0) {
-        rx_buf[rx_len] = '\0';
-        if (strstr((const char *)rx_buf, "ARM") != NULL || strstr((const char *)rx_buf, "CALIBRATE") != NULL) {
-            // Target is ALREADY fully upright and stationary! Start full-frame calibration.
-            g_detector_state = DETECTOR_STATE_CALIBRATING;
-            s_flush_frames = 3; // Flush stale queued frames from camera buffer
-            s_ref_accum_frames = 0;
-            s_ref_ready = false;
-            s_consec_hit_frames = 0;
-            s_hit_cooldown_until_us = 0;
-            memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-            memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-            memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-            ESP_LOGI("EVENT_DETECTOR", ">>> [ARM RECEIVED] Target upright. Calibrating full-frame baseline... <<<");
-            return false;
-        } else if (strstr((const char *)rx_buf, "DISARM") != NULL || strstr((const char *)rx_buf, "DOWN") != NULL) {
-            g_detector_state = DETECTOR_STATE_DOWN;
-            s_ref_ready = false;
-            s_ref_accum_frames = 0;
-            s_consec_hit_frames = 0;
-            ESP_LOGI("EVENT_DETECTOR", ">>> [DISARM RECEIVED] Target down. Detection locked. <<<");
-            return false;
+    // 1. Process UART commands from Pop ESP32 (Non-blocking with line buffer)
+    static char s_bridge_line_buf[64];
+    static size_t s_bridge_line_idx = 0;
+    uint8_t rx_raw[32];
+    int rx_len = uart_read_bytes(BRIDGE_UART_NUM, rx_raw, sizeof(rx_raw), 0);
+    for (int i = 0; i < rx_len; i++) {
+        char c = (char)rx_raw[i];
+        if (c == '\n' || c == '\r') {
+            if (s_bridge_line_idx > 0) {
+                s_bridge_line_buf[s_bridge_line_idx] = '\0';
+                
+                if (strstr(s_bridge_line_buf, "PERM_UP,1") != NULL || strstr(s_bridge_line_buf, "PERM_UP_ON") != NULL) {
+                    s_perm_up_mode = true;
+                    ESP_LOGI("EVENT_DETECTOR", ">>> [PERM_UP_ON] Permanent Up Mode ACTIVE on P4! <<<");
+                    g_detector_state = DETECTOR_STATE_CALIBRATING;
+                    s_flush_frames = 3;
+                    s_ref_accum_frames = 0;
+                    s_ref_ready = false;
+                    s_consec_hit_frames = 0;
+                    s_hit_cooldown_until_us = 0;
+                    memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                    memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                    memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                } else if (strstr(s_bridge_line_buf, "PERM_UP,0") != NULL || strstr(s_bridge_line_buf, "PERM_UP_OFF") != NULL) {
+                    s_perm_up_mode = false;
+                    ESP_LOGI("EVENT_DETECTOR", ">>> [PERM_UP_OFF] Permanent Up Mode DISABLED on P4 <<<");
+                } else if (strstr(s_bridge_line_buf, "ARM") != NULL || strstr(s_bridge_line_buf, "CALIBRATE") != NULL) {
+                    // Target is stationary upright! Calibrate baseline.
+                    g_detector_state = DETECTOR_STATE_CALIBRATING;
+                    s_flush_frames = 3;
+                    s_ref_accum_frames = 0;
+                    s_ref_ready = false;
+                    s_consec_hit_frames = 0;
+                    s_hit_cooldown_until_us = 0;
+                    memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                    memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                    memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                    ESP_LOGI("EVENT_DETECTOR", ">>> [ARM RECEIVED] Calibrating full-frame baseline... <<<");
+                } else if (strstr(s_bridge_line_buf, "DISARM") != NULL || strstr(s_bridge_line_buf, "DOWN") != NULL) {
+                    s_perm_up_mode = false;
+                    g_detector_state = DETECTOR_STATE_DOWN;
+                    s_ref_ready = false;
+                    s_ref_accum_frames = 0;
+                    s_consec_hit_frames = 0;
+                    ESP_LOGI("EVENT_DETECTOR", ">>> [DISARM RECEIVED] Target down. Detection locked. <<<");
+                }
+                s_bridge_line_idx = 0;
+            }
+        } else if (s_bridge_line_idx < sizeof(s_bridge_line_buf) - 1) {
+            s_bridge_line_buf[s_bridge_line_idx++] = c;
+        } else {
+            s_bridge_line_idx = 0;
         }
     }
 
@@ -510,11 +538,25 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
 
     if (g_detector_state == DETECTOR_STATE_HIT_LOCKED) {
         if (now_us > s_hit_cooldown_until_us) {
-            g_detector_state = DETECTOR_STATE_DOWN;
-            s_ref_ready = false;
-            const char *clear_msg = "CLEAR,1\n";
-            uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
-            ESP_LOGI("EVENT_DETECTOR", "Cooldown expired -> Target returned to DOWN");
+            if (s_perm_up_mode) {
+                // In Permanent Up mode: target remains upright!
+                // Autonomously recalibrate baseline directly on the upright target (including any stuck dart)
+                g_detector_state = DETECTOR_STATE_CALIBRATING;
+                s_flush_frames = 2;
+                s_ref_accum_frames = 0;
+                s_ref_ready = false;
+                s_consec_hit_frames = 0;
+                memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                ESP_LOGI("EVENT_DETECTOR", "🎯 Permanent Up Mode: Auto-recalibrating baseline for next shot!");
+            } else {
+                g_detector_state = DETECTOR_STATE_DOWN;
+                s_ref_ready = false;
+                const char *clear_msg = "CLEAR,1\n";
+                uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
+                ESP_LOGI("EVENT_DETECTOR", "Cooldown expired -> Target returned to DOWN");
+            }
         }
         return false;
     }
@@ -728,10 +770,11 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
 
         // 3. Immediately lock state to prevent double-triggering
         g_detector_state = DETECTOR_STATE_HIT_LOCKED;
-        s_hit_cooldown_until_us = esp_timer_get_time() + 3000000ULL;
+        s_hit_cooldown_until_us = esp_timer_get_time() + (s_perm_up_mode ? 1500000ULL : 3000000ULL);
 
-        ESP_LOGI("EVENT_DETECTOR", "🎯 >>> HIT CONFIRMED! <<< Pos:(%.0f,%.0f) ChangedPx:%lu Color:%lu Conf:%d%% Latency:%.2fms -> SERVO REVERSED!",
-                 cx, cy, (unsigned long)changed_px_count, (unsigned long)color_count, confidence, latency_ms);
+        ESP_LOGI("EVENT_DETECTOR", "🎯 >>> HIT CONFIRMED! <<< Pos:(%.0f,%.0f) ChangedPx:%lu Color:%lu Conf:%d%% Latency:%.2fms -> %s",
+                 cx, cy, (unsigned long)changed_px_count, (unsigned long)color_count, confidence, latency_ms,
+                 s_perm_up_mode ? "PERM UP (TARGET STAYS UP)" : "SERVO REVERSED");
         return true;
     } else {
         // Periodic diagnostic telemetry every 6 frames (~100ms)
