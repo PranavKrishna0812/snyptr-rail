@@ -205,32 +205,8 @@ typedef enum {
     DETECTOR_STATE_HIT_LOCKED        // Hit confirmed! Reverse command dispatched. Detection locked.
 } detector_state_t;
 
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-} roi_pixel_t;
-
-// Persistent reference in PSRAM
-static roi_pixel_t *s_ref_grid = NULL;
-static uint16_t *s_accum_r = NULL;
-static uint16_t *s_accum_g = NULL;
-static uint16_t *s_accum_b = NULL;
-
 static detector_state_t g_detector_state = DETECTOR_STATE_DOWN;
-static bool s_ref_ready = false;
-static bool s_byte_swap_needed = false;
-static bool s_swap_calibrated = false;
 static bool s_perm_up_mode = false; // Permanent UP mode: target stays upright on hit and auto-rearms
-
-static int64_t s_hit_cooldown_until_us = 0;
-static int s_ref_accum_frames = 0;
-static int s_flush_frames = 0;
-static int s_diag_frame_div = 0;
-
-static int s_consec_hit_frames = 0;
-static float s_last_hit_cx = 400.0f;
-static float s_last_hit_cy = 400.0f;
 
 // Background task to receive target calibration and forward USB commands over bridge UART
 static void uart_rx_task(void *arg)
@@ -282,10 +258,7 @@ static void uart_rx_task(void *arg)
                         int flen = snprintf(fwd, sizeof(fwd), "%s\n", cmd_str);
                         uart_write_bytes(BRIDGE_UART_NUM, fwd, flen);
                     } else if (strstr(cmd_str, "ARM") != NULL) {
-                        g_detector_state = DETECTOR_STATE_CALIBRATING;
-                        s_flush_frames = 3;
-                        s_ref_accum_frames = 0;
-                        s_ref_ready = false;
+                        g_detector_state = DETECTOR_STATE_ARMED;
                         char fwd[32];
                         int flen = snprintf(fwd, sizeof(fwd), "%s\n", cmd_str);
                         uart_write_bytes(BRIDGE_UART_NUM, fwd, flen);
@@ -474,377 +447,7 @@ static void set_camera_exposure_target(int value)
 }
 
 // --- EMBEDDED LIGHTWEIGHT MODEL: HYBRID DIFFERENTIAL + NORMALIZED CHROMATICITY DETECTOR ---
-// Works across wide lighting conditions (indoor LED, 80,000 lux outdoor sunlight, shade, golden hour)
-// ============================================================================
-// HIGH-SPEED DETERMINISTIC TARGET EVENT DETECTOR (FULL ACTIVE FRAME)
-// ============================================================================
-// Physical Setup:
-// The camera is zoomed directly into the black target region across the entire view.
-// Active Region: Full frame [30, 770] x [30, 770] with STEP=4 (186 x 186 grid = 34,596 points).
-//
-// Lifecycle:
-// 1. TARGET DOWN: Camera is IDLE. Zero calibration. Zero triggers.
-// 2. TARGET POPPED UP: Pop ESP32 moves servo + 400ms settle -> sends "ARM,1"
-// 3. CALIBRATION: Flushes stale queue frames, averages 4 stationary frames of the full black target.
-// 4. ARMED: Continuous full-frame monitoring against the calibrated baseline.
-// 5. HIT DETECTION:
-//    - When a Nerf projectile enters/hits, a LARGE AMOUNT of pixels suddenly changes!
-//    - changed_px_count >= 70 (approx 1,120+ full pixels): IMMEDIATE HIT CONFIRMED!
-//    - changed_px_count >= 35 with 2-frame persistence: HIT CONFIRMED!
-//    - Servo reverses instantly (DOWN,1) and locks state until next cycle.
-// ============================================================================
-
-#define FULL_ROI_X_MIN   30
 #define STANDALONE_NO_VIDEO_STREAM 0
-
-static inline void unpack_rgb565(uint16_t p, bool swap, int *r, int *g, int *b)
-{
-    if (swap) {
-        p = (uint16_t)((p >> 8) | (p << 8));
-    }
-    int r5 = (p >> 11) & 0x1F;
-    int g6 = (p >> 5) & 0x3F;
-    int b5 = p & 0x1F;
-    *r = (r5 << 3) | (r5 >> 2);
-    *g = (g6 << 2) | (g6 >> 4);
-    *b = (b5 << 3) | (b5 >> 2);
-}
-
-static void init_detector_memory(void)
-{
-    if (s_ref_grid == NULL) {
-        size_t grid_bytes = ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(roi_pixel_t);
-        size_t accum_bytes = ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t);
-        s_ref_grid = (roi_pixel_t *)heap_caps_calloc(1, grid_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_accum_r = (uint16_t *)heap_caps_calloc(1, accum_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_accum_g = (uint16_t *)heap_caps_calloc(1, accum_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_accum_b = (uint16_t *)heap_caps_calloc(1, accum_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        ESP_LOGI("EVENT_DETECTOR", "Detector memory allocated: %u KB in PSRAM (Full Frame %dx%d)",
-                 (unsigned int)((grid_bytes + accum_bytes * 3) / 1024), ROI_GRID_COLS, ROI_GRID_ROWS);
-    }
-}
-
-static bool process_target_event_frame(const uint16_t *pixels, int width, int height,
-                                       float *out_x, float *out_y, int *out_delta, int *out_color, int *out_motion)
-{
-    (void)height;
-    int64_t frame_start_us = esp_timer_get_time();
-
-    // 1. Process UART commands from Pop ESP32 (Non-blocking with line buffer)
-    static char s_bridge_line_buf[64];
-    static size_t s_bridge_line_idx = 0;
-    uint8_t rx_raw[32];
-    int rx_len = uart_read_bytes(BRIDGE_UART_NUM, rx_raw, sizeof(rx_raw), 0);
-    for (int i = 0; i < rx_len; i++) {
-        char c = (char)rx_raw[i];
-        if (c == '\n' || c == '\r') {
-            if (s_bridge_line_idx > 0) {
-                s_bridge_line_buf[s_bridge_line_idx] = '\0';
-                
-                if (strstr(s_bridge_line_buf, "PERM_UP,1") != NULL || strstr(s_bridge_line_buf, "PERM_UP_ON") != NULL) {
-                    s_perm_up_mode = true;
-                    ESP_LOGI("EVENT_DETECTOR", ">>> [PERM_UP_ON] Permanent Up Mode ACTIVE on P4! <<<");
-                    g_detector_state = DETECTOR_STATE_CALIBRATING;
-                    s_flush_frames = 3;
-                    s_ref_accum_frames = 0;
-                    s_ref_ready = false;
-                    s_consec_hit_frames = 0;
-                    s_hit_cooldown_until_us = 0;
-                    memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                    memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                    memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                } else if (strstr(s_bridge_line_buf, "PERM_UP,0") != NULL || strstr(s_bridge_line_buf, "PERM_UP_OFF") != NULL) {
-                    s_perm_up_mode = false;
-                    ESP_LOGI("EVENT_DETECTOR", ">>> [PERM_UP_OFF] Permanent Up Mode DISABLED on P4 <<<");
-                } else if (strstr(s_bridge_line_buf, "ARM") != NULL || strstr(s_bridge_line_buf, "CALIBRATE") != NULL) {
-                    // Target is stationary upright! Calibrate baseline.
-                    g_detector_state = DETECTOR_STATE_CALIBRATING;
-                    s_flush_frames = 3;
-                    s_ref_accum_frames = 0;
-                    s_ref_ready = false;
-                    s_consec_hit_frames = 0;
-                    s_hit_cooldown_until_us = 0;
-                    memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                    memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                    memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                    ESP_LOGI("EVENT_DETECTOR", ">>> [ARM RECEIVED] Calibrating full-frame baseline... <<<");
-                } else if (strstr(s_bridge_line_buf, "DISARM") != NULL || strstr(s_bridge_line_buf, "DOWN") != NULL) {
-                    s_perm_up_mode = false;
-                    g_detector_state = DETECTOR_STATE_DOWN;
-                    s_ref_ready = false;
-                    s_ref_accum_frames = 0;
-                    s_consec_hit_frames = 0;
-                    ESP_LOGI("EVENT_DETECTOR", ">>> [DISARM RECEIVED] Target down. Detection locked. <<<");
-                }
-                s_bridge_line_idx = 0;
-            }
-        } else if (s_bridge_line_idx < sizeof(s_bridge_line_buf) - 1) {
-            s_bridge_line_buf[s_bridge_line_idx++] = c;
-        } else {
-            s_bridge_line_idx = 0;
-        }
-    }
-
-    int64_t now_us = esp_timer_get_time();
-
-    // 2. FSM State Management
-    if (g_detector_state == DETECTOR_STATE_DOWN) {
-        return false;
-    }
-
-    if (g_detector_state == DETECTOR_STATE_HIT_LOCKED) {
-        if (now_us > s_hit_cooldown_until_us) {
-            if (s_perm_up_mode) {
-                // In Permanent Up mode: target remains upright!
-                // Autonomously recalibrate baseline directly on the upright target (including any stuck dart)
-                g_detector_state = DETECTOR_STATE_CALIBRATING;
-                s_flush_frames = 2;
-                s_ref_accum_frames = 0;
-                s_ref_ready = false;
-                s_consec_hit_frames = 0;
-                memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-                ESP_LOGI("EVENT_DETECTOR", "🎯 Permanent Up Mode: Auto-recalibrating baseline for next shot!");
-            } else {
-                g_detector_state = DETECTOR_STATE_DOWN;
-                s_ref_ready = false;
-                const char *clear_msg = "CLEAR,1\n";
-                uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
-                ESP_LOGI("EVENT_DETECTOR", "Cooldown expired -> Target returned to DOWN");
-            }
-        }
-        return false;
-    }
-
-    // Auto-detect byte swap on the first upright frame if needed
-    if (!s_swap_calibrated) {
-        int disp_no_swap = 0, disp_swap = 0;
-        for (int dy = -10; dy <= 10; dy += 2) {
-            int row = (400 + dy) * width;
-            for (int dx = -10; dx <= 10; dx += 2) {
-                uint16_t p = pixels[row + 400 + dx];
-                int r1, g1, b1, r2, g2, b2;
-                unpack_rgb565(p, false, &r1, &g1, &b1);
-                unpack_rgb565(p, true, &r2, &g2, &b2);
-                disp_no_swap += abs(r1 - g1) + abs(g1 - b1) + abs(b1 - r1);
-                disp_swap += abs(r2 - g2) + abs(g2 - b2) + abs(b2 - r2);
-            }
-        }
-        s_byte_swap_needed = (disp_swap < disp_no_swap);
-        s_swap_calibrated = true;
-        ESP_LOGI("EVENT_DETECTOR", "Camera Endianness calibrated: swap=%s",
-                 s_byte_swap_needed ? "TRUE" : "FALSE");
-    }
-
-    // 3. CALIBRATION PHASE: Accumulate 4 stationary frames across full frame
-    if (g_detector_state == DETECTOR_STATE_CALIBRATING) {
-        if (s_flush_frames > 0) {
-            s_flush_frames--;
-            return false;
-        }
-
-        for (int gy = 0; gy < ROI_GRID_ROWS; gy++) {
-            int y = FULL_ROI_Y_MIN + gy * FULL_ROI_STEP;
-            int row_offset = y * width;
-            int grid_row_idx = gy * ROI_GRID_COLS;
-            for (int gx = 0; gx < ROI_GRID_COLS; gx++) {
-                int x = FULL_ROI_X_MIN + gx * FULL_ROI_STEP;
-                uint16_t p = pixels[row_offset + x];
-                int r, g, b;
-                unpack_rgb565(p, s_byte_swap_needed, &r, &g, &b);
-                int idx = grid_row_idx + gx;
-                s_accum_r[idx] += (uint16_t)r;
-                s_accum_g[idx] += (uint16_t)g;
-                s_accum_b[idx] += (uint16_t)b;
-            }
-        }
-        s_ref_accum_frames++;
-
-        if (s_ref_accum_frames >= 4) {
-            uint64_t total_r = 0, total_g = 0, total_b = 0;
-            uint32_t point_count = ROI_GRID_ROWS * ROI_GRID_COLS;
-
-            for (int gy = 0; gy < ROI_GRID_ROWS; gy++) {
-                int grid_row_idx = gy * ROI_GRID_COLS;
-                for (int gx = 0; gx < ROI_GRID_COLS; gx++) {
-                    int idx = grid_row_idx + gx;
-                    s_ref_grid[idx].r = (uint8_t)(s_accum_r[idx] / 4);
-                    s_ref_grid[idx].g = (uint8_t)(s_accum_g[idx] / 4);
-                    s_ref_grid[idx].b = (uint8_t)(s_accum_b[idx] / 4);
-                    total_r += s_ref_grid[idx].r;
-                    total_g += s_ref_grid[idx].g;
-                    total_b += s_ref_grid[idx].b;
-                }
-            }
-
-            int avg_r = (int)(total_r / point_count);
-            int avg_g = (int)(total_g / point_count);
-            int avg_b = (int)(total_b / point_count);
-
-            s_ref_ready = true;
-            g_detector_state = DETECTOR_STATE_ARMED;
-            s_consec_hit_frames = 0;
-            const char *armed_msg = "ARMED,1\n";
-            uart_write_bytes(BRIDGE_UART_NUM, armed_msg, strlen(armed_msg));
-            ESP_LOGI("EVENT_DETECTOR", "✅ FULL-FRAME TARGET CALIBRATED (Mean RGB: %d,%d,%d). SYSTEM ARMED!",
-                     avg_r, avg_g, avg_b);
-        }
-        return false;
-    }
-
-    // 4. ARMED STATE: Continuous Full-Frame Large Pixel Change Detection
-    if (g_detector_state != DETECTOR_STATE_ARMED || !s_ref_ready) {
-        return false;
-    }
-
-    uint32_t changed_px_count = 0;
-    uint32_t color_count = 0;
-
-    int min_x = 9999, max_x = -1;
-    int min_y = 9999, max_y = -1;
-    uint64_t sum_x = 0, sum_y = 0;
-
-    // Scan full frame grid
-    for (int gy = 0; gy < ROI_GRID_ROWS; gy++) {
-        int y = FULL_ROI_Y_MIN + gy * FULL_ROI_STEP;
-        int row_offset = y * width;
-        int grid_row_idx = gy * ROI_GRID_COLS;
-
-        for (int gx = 0; gx < ROI_GRID_COLS; gx++) {
-            int x = FULL_ROI_X_MIN + gx * FULL_ROI_STEP;
-            uint16_t p = pixels[row_offset + x];
-            int r, g, b;
-            unpack_rgb565(p, s_byte_swap_needed, &r, &g, &b);
-
-            int idx = grid_row_idx + gx;
-            int ref_r = s_ref_grid[idx].r;
-            int ref_g = s_ref_grid[idx].g;
-            int ref_b = s_ref_grid[idx].b;
-
-            int d_ref = abs(r - ref_r) + abs(g - ref_g) + abs(b - ref_b);
-            int gain = (r + g + b) - (ref_r + ref_g + ref_b);
-
-            // Compute pixel chromaticity (saturation / colorfulness)
-            int max_c = r; if (g > max_c) max_c = g; if (b > max_c) max_c = b;
-            int min_c = r; if (g < min_c) min_c = g; if (b < min_c) min_c = b;
-            int chroma = max_c - min_c;
-
-            // GLARE & AMBIENT LIGHT REJECTION:
-            // Specular reflections and light bounces off black/neutral surfaces are achromatic (R ~= G ~= B).
-            // Reject any low-chroma pixel (chroma < 32) so ambient light bounces can NEVER register as dart hits!
-            if (chroma < 32) {
-                continue;
-            }
-
-            // Nerf projectile chromaticity characteristics
-            // 1. Yellow foam dart: high red & green, low blue, strong chroma
-            bool is_yellow = ((r + g >= 160) && (b <= 85) && (r >= b + 25) && (g >= b + 15) && (chroma >= 38));
-            // 2. Orange tip / body: high red, moderate green, low blue, strong chroma
-            bool is_orange = ((r >= 115) && (g >= 35) && (b <= 80) && (r >= g + 20) && (r >= b + 28) && (chroma >= 40));
-            // 3. Other vibrant darts (e.g. Elite blue foam, neon green):
-            bool is_vibrant = (chroma >= 45 && d_ref >= 48 && gain >= 26);
-
-            bool is_dart_px = (is_yellow || is_orange || is_vibrant);
-            if (is_dart_px) {
-                changed_px_count++;
-                color_count++;
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-                sum_x += (uint64_t)x;
-                sum_y += (uint64_t)y;
-            }
-        }
-    }
-
-    int span_x = (changed_px_count > 0) ? (max_x - min_x) : 0;
-    int span_y = (changed_px_count > 0) ? (max_y - min_y) : 0;
-    float cx = (changed_px_count > 0) ? ((float)sum_x / (float)changed_px_count) : 400.0f;
-    float cy = (changed_px_count > 0) ? ((float)sum_y / (float)changed_px_count) : 400.0f;
-
-    // Spatial Cluster Verification:
-    // A Nerf projectile impact is a tight, localized cluster (10px to 160px span).
-    // Ambient shadows or diffuse reflections span across wide portions of the 800x800 frame.
-    int box_cols = (span_x / FULL_ROI_STEP) + 1;
-    int box_rows = (span_y / FULL_ROI_STEP) + 1;
-    int box_pts = box_cols * box_rows;
-    float density = (box_pts > 0) ? ((float)changed_px_count / (float)box_pts) : 0.0f;
-
-    bool is_compact_cluster = (span_x >= 10 && span_x <= 160 &&
-                               span_y >= 10 && span_y <= 160 &&
-                               density >= 0.12f);
-
-    *out_x = cx;
-    *out_y = cy;
-    *out_delta = (int)changed_px_count;
-    *out_color = (int)color_count;
-    *out_motion = 0;
-
-    bool hit_confirmed = false;
-    int confidence = 0;
-
-    // Direct Hit Detection:
-    // 1. Large impact: >= 40 sample points (640+ image pixels) with compact cluster
-    if (changed_px_count >= 40 && is_compact_cluster) {
-        hit_confirmed = true;
-        confidence = 100;
-    }
-    // 2. Moderate impact: >= 25 sample points (400+ image pixels) persisting for 2 frames
-    else if (changed_px_count >= 25 && is_compact_cluster) {
-        if (s_consec_hit_frames >= 1) {
-            float dx = cx - s_last_hit_cx;
-            float dy = cy - s_last_hit_cy;
-            if ((dx * dx + dy * dy) <= (60.0f * 60.0f)) {
-                hit_confirmed = true;
-                confidence = 95;
-            }
-        }
-        s_consec_hit_frames++;
-        s_last_hit_cx = cx;
-        s_last_hit_cy = cy;
-    } else {
-        s_consec_hit_frames = 0;
-    }
-
-    float latency_ms = (float)(esp_timer_get_time() - frame_start_us) / 1000.0f;
-
-    if (hit_confirmed) {
-        // --- 1. IMMEDIATELY DISPATCH REVERSE COMMAND OVER UART ---
-        char hit_cmd[64];
-        int hlen = snprintf(hit_cmd, sizeof(hit_cmd), "HIT,1,%.0f,%.0f,%lu\n",
-                            cx, cy, (unsigned long)(changed_px_count * 16));
-        uart_write_bytes(BRIDGE_UART_NUM, hit_cmd, hlen);
-
-        // 2. Dispatch detailed diagnostic telemetry
-        char diag_msg[96];
-        int dlen = snprintf(diag_msg, sizeof(diag_msg), "DIAG,HIT,%lu,%lu,0,%d,%d,%d,%.1f\n",
-                            (unsigned long)changed_px_count, (unsigned long)color_count,
-                            span_x, span_y, confidence, latency_ms);
-        uart_write_bytes(BRIDGE_UART_NUM, diag_msg, dlen);
-
-        // 3. Immediately lock state to prevent double-triggering
-        g_detector_state = DETECTOR_STATE_HIT_LOCKED;
-        s_hit_cooldown_until_us = esp_timer_get_time() + (s_perm_up_mode ? 1500000ULL : 3000000ULL);
-
-        ESP_LOGI("EVENT_DETECTOR", "🎯 >>> HIT CONFIRMED! <<< Pos:(%.0f,%.0f) ChangedPx:%lu Color:%lu Conf:%d%% Latency:%.2fms -> %s",
-                 cx, cy, (unsigned long)changed_px_count, (unsigned long)color_count, confidence, latency_ms,
-                 s_perm_up_mode ? "PERM UP (TARGET STAYS UP)" : "SERVO REVERSED");
-        return true;
-    } else {
-        // Periodic diagnostic telemetry every 6 frames (~100ms)
-        if (++s_diag_frame_div >= 6) {
-            s_diag_frame_div = 0;
-            char diag_msg[96];
-            int dlen = snprintf(diag_msg, sizeof(diag_msg), "DIAG,ARMED,%lu,%lu,0,%d,%d,0,0.0\n",
-                                (unsigned long)changed_px_count, (unsigned long)color_count,
-                                span_x, span_y);
-            uart_write_bytes(BRIDGE_UART_NUM, diag_msg, dlen);
-        }
-        return false;
-    }
-}
 
 // Camera Capture and Stream Task
 static void camera_stream_task(void *arg)
@@ -1029,8 +632,7 @@ static void camera_stream_task(void *arg)
     int64_t last_stat_time = esp_timer_get_time();
     const int64_t frame_interval_us = 1000000 / STREAM_MAX_FPS;
 
-    init_detector_memory();
-    ESP_LOGI(TAG, "Starting camera capture loop (Full Camera Speed Event Detection)...");
+    ESP_LOGI(TAG, "Starting camera capture and streaming loop...");
 
     while (true) {
         memset(&buf, 0, sizeof(buf));
@@ -1047,14 +649,8 @@ static void camera_stream_task(void *arg)
             uint32_t out_len = buf.bytesused;
 
             if (frame_ptr != NULL && out_len > 0) {
-                // --- 1. HIGH-SPEED DETERMINISTIC EVENT DETECTION (EVERY FRAME) ---
-                uint16_t *pixels = (uint16_t *)frame_ptr;
-                float hit_x = 0.0f, hit_y = 0.0f;
-                int hit_delta = 0, hit_color = 0, hit_motion = 0;
-                process_target_event_frame(pixels, 800, 800, &hit_x, &hit_y, &hit_delta, &hit_color, &hit_motion);
-
                 #if !STANDALONE_NO_VIDEO_STREAM
-                // --- 2. PACED JPEG VIDEO STREAMING OVER UART0 (COM PORT) ---
+                // --- PACED JPEG VIDEO STREAMING OVER UART0 (COM PORT) ---
                 int64_t now_stream = esp_timer_get_time();
                 if (now_stream - last_transmit_time >= frame_interval_us) {
                     last_transmit_time = now_stream;
@@ -1078,15 +674,15 @@ static void camera_stream_task(void *arg)
 
                         shot_metadata_t meta = {
                             .magic = {0xDE, 0xAD, 0xBE, 0xEF},
-                            .laser_found = (hit_delta > 0) ? 1 : 0,
+                            .laser_found = 0,
                             .zone = 1,
                             .score_ring = 10,
                             .is_calibrated = 1,
-                            .laser_x_px = (uint16_t)hit_x,
-                            .laser_y_px = (uint16_t)hit_y,
+                            .laser_x_px = 400,
+                            .laser_y_px = 400,
                             .laser_x_mm = 0.0f,
                             .laser_y_mm = 0.0f,
-                            .laser_dist_mm = (float)hit_delta
+                            .laser_dist_mm = 0.0f
                         };
                         
                         memcpy(g_jpeg_out_buf + jpeg_encoded_size, &meta, sizeof(meta));
