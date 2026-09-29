@@ -382,28 +382,32 @@ static void set_camera_exposure_target(int value)
 // ============================================================================
 // Physical Architecture:
 // 1. Camera is zoomed into the optimal zone of the pop-up target.
-// 2. Optimal ROI: Ellipse centered at (X=400, Y=280) with Rx=160, Ry=150.
-//    Strictly excludes the 3D-printed yellow/orange rail at the bottom (Y >= 480).
+// 2. Optimal ROI: Ellipse centered at (X=400, Y=240) with Rx=140, Ry=130.
+//    Y is strictly clamped within [110, 370], completely free of the bottom rail (Y >= 440).
 // 3. FSM Lifecycle:
-//    TARGET_DOWN -> ARM -> RISING (850ms settle) -> ESTABLISH_REF (avg 3 frames)
-//    -> ARMED (watch optimal ROI at full camera FPS)
-//    -> HIT CONFIRMED (multi-signal voting) -> DISPATCH REVERSE (DOWN,1) -> LOCKED
+//    TARGET_DOWN: Camera is IDLE. ZERO calibration. ZERO false triggers.
+//    TARGET_POPPED_UP: Pop ESP32 settles servo + 400ms -> sends "ARM,1"
+//    CALIBRATING: P4 flushes stale queue frames, averages 5 stationary frames of black target.
+//    ARMED: Frame-by-frame analysis watching the calibrated black target.
+//    HIT DETECTION:
+//      - Real Nerf dart creates a dense, localized cluster of changed/orange/yellow pixels.
+//      - Dart stuck to target persists across consecutive frames at the same position.
+//      - Confirmed hit triggers immediate reverse command (HIT,1) and locks state.
 // ============================================================================
 
 #define OPTIMAL_ROI_CENTER_X   400
-#define OPTIMAL_ROI_CENTER_Y   280
-#define OPTIMAL_ROI_RADIUS_X   160
-#define OPTIMAL_ROI_RADIUS_Y   150
+#define OPTIMAL_ROI_CENTER_Y   240
+#define OPTIMAL_ROI_RADIUS_X   140
+#define OPTIMAL_ROI_RADIUS_Y   130
 #define OPTIMAL_ROI_STEP       2
 
-#define ROI_GRID_COLS  ((2 * OPTIMAL_ROI_RADIUS_X) / OPTIMAL_ROI_STEP + 1) // 161
-#define ROI_GRID_ROWS  ((2 * OPTIMAL_ROI_RADIUS_Y) / OPTIMAL_ROI_STEP + 1) // 151
+#define ROI_GRID_COLS  ((2 * OPTIMAL_ROI_RADIUS_X) / OPTIMAL_ROI_STEP + 1) // 141
+#define ROI_GRID_ROWS  ((2 * OPTIMAL_ROI_RADIUS_Y) / OPTIMAL_ROI_STEP + 1) // 131
 
 typedef enum {
-    DETECTOR_STATE_DOWN = 0,         // Target is lowered / retracted. Detection is LOCKED.
-    DETECTOR_STATE_RISING,           // Target is swinging up. Mechanical settle window (850ms).
-    DETECTOR_STATE_ESTABLISH_REF,    // Target is upright & stationary. Averaging 3 frames for reference.
-    DETECTOR_STATE_ARMED,            // Stationary reference established. Continuous high-speed monitoring.
+    DETECTOR_STATE_DOWN = 0,         // Target is lowered / retracted. Detection is LOCKED. Zero calibration.
+    DETECTOR_STATE_CALIBRATING,      // Target is upright & stationary. Averaging 5 frames for reference.
+    DETECTOR_STATE_ARMED,            // Stationary reference established. Continuous frame-by-frame monitoring.
     DETECTOR_STATE_HIT_LOCKED        // Hit confirmed! Reverse command dispatched. Detection locked.
 } detector_state_t;
 
@@ -413,9 +417,8 @@ typedef struct {
     uint8_t b;
 } roi_pixel_t;
 
-// Persistent reference and temporal grids in PSRAM
+// Persistent reference in PSRAM
 static roi_pixel_t *s_ref_grid = NULL;
-static roi_pixel_t *s_prev_grid = NULL;
 static uint16_t *s_accum_r = NULL;
 static uint16_t *s_accum_g = NULL;
 static uint16_t *s_accum_b = NULL;
@@ -425,11 +428,14 @@ static bool s_ref_ready = false;
 static bool s_byte_swap_needed = false;
 static bool s_swap_calibrated = false;
 
-static int64_t s_arm_settle_until_us = 0;
 static int64_t s_hit_cooldown_until_us = 0;
 static int s_ref_accum_frames = 0;
 static int s_flush_frames = 0;
 static int s_diag_frame_div = 0;
+
+static int s_consec_hit_frames = 0;
+static float s_last_hit_cx = 400.0f;
+static float s_last_hit_cy = 240.0f;
 
 #define STANDALONE_NO_VIDEO_STREAM 1
 
@@ -452,12 +458,11 @@ static void init_detector_memory(void)
         size_t grid_bytes = ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(roi_pixel_t);
         size_t accum_bytes = ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t);
         s_ref_grid = (roi_pixel_t *)heap_caps_calloc(1, grid_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_prev_grid = (roi_pixel_t *)heap_caps_calloc(1, grid_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         s_accum_r = (uint16_t *)heap_caps_calloc(1, accum_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         s_accum_g = (uint16_t *)heap_caps_calloc(1, accum_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         s_accum_b = (uint16_t *)heap_caps_calloc(1, accum_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         ESP_LOGI("EVENT_DETECTOR", "Detector memory allocated: %u KB in PSRAM",
-                 (unsigned int)((grid_bytes * 2 + accum_bytes * 3) / 1024));
+                 (unsigned int)((grid_bytes + accum_bytes * 3) / 1024));
     }
 }
 
@@ -472,19 +477,25 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
     int rx_len = uart_read_bytes(BRIDGE_UART_NUM, rx_buf, sizeof(rx_buf) - 1, 0);
     if (rx_len > 0) {
         rx_buf[rx_len] = '\0';
-        if (strstr((const char *)rx_buf, "ARM") != NULL) {
-            g_detector_state = DETECTOR_STATE_RISING;
-            s_arm_settle_until_us = frame_start_us + 850000ULL; // 850ms mechanical settle window
-            s_ref_ready = false;
+        if (strstr((const char *)rx_buf, "ARM") != NULL || strstr((const char *)rx_buf, "CALIBRATE") != NULL) {
+            // Target is ALREADY fully upright and stationary! Start calibration.
+            g_detector_state = DETECTOR_STATE_CALIBRATING;
+            s_flush_frames = 3; // Flush stale queued frames from camera buffer
             s_ref_accum_frames = 0;
+            s_ref_ready = false;
+            s_consec_hit_frames = 0;
             s_hit_cooldown_until_us = 0;
-            ESP_LOGI("EVENT_DETECTOR", ">>> [ARM RECEIVED] Target rising. Settling for 850ms... <<<");
+            memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+            memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+            memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+            ESP_LOGI("EVENT_DETECTOR", ">>> [ARM RECEIVED] Target upright. Flushing queue & calibrating baseline... <<<");
             return false;
         } else if (strstr((const char *)rx_buf, "DISARM") != NULL || strstr((const char *)rx_buf, "DOWN") != NULL) {
             g_detector_state = DETECTOR_STATE_DOWN;
             s_ref_ready = false;
             s_ref_accum_frames = 0;
-            ESP_LOGI("EVENT_DETECTOR", ">>> [DISARM RECEIVED] Target down. Detection locked. <<<");
+            s_consec_hit_frames = 0;
+            ESP_LOGI("EVENT_DETECTOR", ">>> [DISARM RECEIVED] Target down. Zero calibration, detection locked. <<<");
             return false;
         }
     }
@@ -493,34 +504,18 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
 
     // 2. FSM State Management
     if (g_detector_state == DETECTOR_STATE_DOWN) {
-        // Target is retracted: ZERO processing, ZERO false positives!
+        // Target is DOWN: NO calibration, NO detection, ZERO false positives!
         return false;
     }
 
     if (g_detector_state == DETECTOR_STATE_HIT_LOCKED) {
-        // Cooldown active after hit: prevent bouncing or double-triggering
         if (now_us > s_hit_cooldown_until_us) {
             g_detector_state = DETECTOR_STATE_DOWN;
+            s_ref_ready = false;
             const char *clear_msg = "CLEAR,1\n";
             uart_write_bytes(BRIDGE_UART_NUM, clear_msg, strlen(clear_msg));
             ESP_LOGI("EVENT_DETECTOR", "Cooldown expired -> Target returned to DOWN");
         }
-        return false;
-    }
-
-    if (g_detector_state == DETECTOR_STATE_RISING) {
-        if (now_us < s_arm_settle_until_us) {
-            // Target is still in mechanical motion/vibration: discard frames
-            return false;
-        }
-        // Exactly 850ms elapsed: Target is now fully upright and stationary!
-        s_flush_frames = 2; // Flush remaining stale frames from camera queue
-        g_detector_state = DETECTOR_STATE_ESTABLISH_REF;
-        s_ref_accum_frames = 0;
-        memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-        memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-        memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
-        ESP_LOGI("EVENT_DETECTOR", "Target settled! Flushing stale frames & establishing reference...");
         return false;
     }
 
@@ -544,13 +539,14 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
                  s_byte_swap_needed ? "TRUE" : "FALSE");
     }
 
-    if (g_detector_state == DETECTOR_STATE_ESTABLISH_REF) {
+    // 3. CALIBRATION PHASE: Only when target is UP and stationary
+    if (g_detector_state == DETECTOR_STATE_CALIBRATING) {
         if (s_flush_frames > 0) {
             s_flush_frames--;
             return false;
         }
 
-        // Accumulate 3 stationary frames for high-SNR reference baseline
+        // Accumulate 5 stationary frames of the black target for high-SNR reference
         for (int gy = 0; gy < ROI_GRID_ROWS; gy++) {
             int y = (OPTIMAL_ROI_CENTER_Y - OPTIMAL_ROI_RADIUS_Y) + gy * OPTIMAL_ROI_STEP;
             int row_offset = y * width;
@@ -567,71 +563,112 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
         }
         s_ref_accum_frames++;
 
-        if (s_ref_accum_frames >= 3) {
-            // Compute average reference baseline and initialize prev_grid
+        if (s_ref_accum_frames >= 5) {
+            uint64_t total_r = 0, total_g = 0, total_b = 0;
+            uint32_t point_count = 0;
+
             for (int gy = 0; gy < ROI_GRID_ROWS; gy++) {
+                int y = (OPTIMAL_ROI_CENTER_Y - OPTIMAL_ROI_RADIUS_Y) + gy * OPTIMAL_ROI_STEP;
+                int dy = y - OPTIMAL_ROI_CENTER_Y;
+                int dy_term = dy * dy * 19600;
                 for (int gx = 0; gx < ROI_GRID_COLS; gx++) {
+                    int x = (OPTIMAL_ROI_CENTER_X - OPTIMAL_ROI_RADIUS_X) + gx * OPTIMAL_ROI_STEP;
+                    int dx = x - OPTIMAL_ROI_CENTER_X;
                     int idx = gy * ROI_GRID_COLS + gx;
-                    s_ref_grid[idx].r = (uint8_t)(s_accum_r[idx] / 3);
-                    s_ref_grid[idx].g = (uint8_t)(s_accum_g[idx] / 3);
-                    s_ref_grid[idx].b = (uint8_t)(s_accum_b[idx] / 3);
-                    s_prev_grid[idx] = s_ref_grid[idx];
+                    s_ref_grid[idx].r = (uint8_t)(s_accum_r[idx] / 5);
+                    s_ref_grid[idx].g = (uint8_t)(s_accum_g[idx] / 5);
+                    s_ref_grid[idx].b = (uint8_t)(s_accum_b[idx] / 5);
+
+                    if ((dx * dx * 16900 + dy_term) <= 331240000) {
+                        total_r += s_ref_grid[idx].r;
+                        total_g += s_ref_grid[idx].g;
+                        total_b += s_ref_grid[idx].b;
+                        point_count++;
+                    }
                 }
             }
-            s_ref_ready = true;
-            g_detector_state = DETECTOR_STATE_ARMED;
-            const char *armed_msg = "ARMED,1\n";
-            uart_write_bytes(BRIDGE_UART_NUM, armed_msg, strlen(armed_msg));
-            ESP_LOGI("EVENT_DETECTOR", "✅ STABLE BLACK TARGET REFERENCE ESTABLISHED. SYSTEM ARMED!");
+
+            int avg_r = (point_count > 0) ? (int)(total_r / point_count) : 0;
+            int avg_g = (point_count > 0) ? (int)(total_g / point_count) : 0;
+            int avg_b = (point_count > 0) ? (int)(total_b / point_count) : 0;
+
+            // Safety guard: ensure the camera actually sees the dark target face, not the bright wall (RGB > 160)
+            if (avg_r < 140 && avg_g < 140 && avg_b < 125) {
+                s_ref_ready = true;
+                g_detector_state = DETECTOR_STATE_ARMED;
+                s_consec_hit_frames = 0;
+                const char *armed_msg = "ARMED,1\n";
+                uart_write_bytes(BRIDGE_UART_NUM, armed_msg, strlen(armed_msg));
+                ESP_LOGI("EVENT_DETECTOR", "✅ TARGET UPRIGHT & CALIBRATED (Mean RGB: %d,%d,%d). SYSTEM ARMED!",
+                         avg_r, avg_g, avg_b);
+            } else {
+                ESP_LOGW("EVENT_DETECTOR", "Calibration saw bright scene (RGB: %d,%d,%d). Waiting for black target...",
+                         avg_r, avg_g, avg_b);
+                s_ref_accum_frames = 0;
+                memset(s_accum_r, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                memset(s_accum_g, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+                memset(s_accum_b, 0, ROI_GRID_ROWS * ROI_GRID_COLS * sizeof(uint16_t));
+            }
         }
         return false;
     }
 
-    // 3. TARGET IS ARMED: Continuous High-Speed Multi-Signal Evaluation
+    // 4. ARMED STATE: Continuous Frame-by-Frame Bullet Analysis
     if (g_detector_state != DETECTOR_STATE_ARMED || !s_ref_ready) {
         return false;
     }
 
-    uint32_t delta_ref_count = 0;
-    uint32_t motion_prev_count = 0;
+    uint32_t bullet_px_count = 0;
     uint32_t color_count = 0;
-    uint32_t roi_points = 0;
 
     int min_x = 9999, max_x = -1;
     int min_y = 9999, max_y = -1;
     uint64_t sum_x = 0, sum_y = 0;
 
     // Scan optimal elliptical ROI
-    // Ellipse test: (dx*dx * 22500) + (dy*dy * 25600) <= 576000000
+    // Ellipse test: (dx*dx * 16900) + (dy*dy * 19600) <= 331240000
     for (int gy = 0; gy < ROI_GRID_ROWS; gy++) {
         int y = (OPTIMAL_ROI_CENTER_Y - OPTIMAL_ROI_RADIUS_Y) + gy * OPTIMAL_ROI_STEP;
         int dy = y - OPTIMAL_ROI_CENTER_Y;
-        int dy_term = dy * dy * 25600;
+        int dy_term = dy * dy * 19600;
         int row_offset = y * width;
         int grid_row_idx = gy * ROI_GRID_COLS;
 
         for (int gx = 0; gx < ROI_GRID_COLS; gx++) {
             int x = (OPTIMAL_ROI_CENTER_X - OPTIMAL_ROI_RADIUS_X) + gx * OPTIMAL_ROI_STEP;
             int dx = x - OPTIMAL_ROI_CENTER_X;
-            if ((dx * dx * 22500 + dy_term) > 576000000) {
+            if ((dx * dx * 16900 + dy_term) > 331240000) {
                 continue;
             }
-            roi_points++;
 
             uint16_t p = pixels[row_offset + x];
             int r, g, b;
             unpack_rgb565(p, s_byte_swap_needed, &r, &g, &b);
 
             int idx = grid_row_idx + gx;
-
-            // Signal 1: Reference Delta
             int ref_r = s_ref_grid[idx].r;
             int ref_g = s_ref_grid[idx].g;
             int ref_b = s_ref_grid[idx].b;
-            int d_ref = abs(r - ref_r) + abs(g - ref_g) + abs(b - ref_b);
 
-            if (d_ref >= 38) {
-                delta_ref_count++;
+            // Pixel difference and brightness gain over black baseline
+            int d_ref = abs(r - ref_r) + abs(g - ref_g) + abs(b - ref_b);
+            int gain = (r + g + b) - (ref_r + ref_g + ref_b);
+
+            // Color characteristics of Nerf foam body (yellow) and tip (orange)
+            bool is_yellow = ((r + g >= 165) && (b <= 85) && (r >= b + 22) && (g >= b + 12));
+            bool is_orange = ((r >= 120) && (g >= 40) && (b <= 75) && (r >= g + 25) && (r >= b + 30));
+
+            bool is_bullet_px = false;
+            if (is_yellow || is_orange) {
+                is_bullet_px = true;
+                color_count++;
+            } else if (d_ref >= 48 && gain >= 35) {
+                // High contrast bright pixel on the black target
+                is_bullet_px = true;
+            }
+
+            if (is_bullet_px) {
+                bullet_px_count++;
                 if (x < min_x) min_x = x;
                 if (x > max_x) max_x = x;
                 if (y < min_y) min_y = y;
@@ -639,65 +676,52 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
                 sum_x += (uint64_t)x;
                 sum_y += (uint64_t)y;
             }
-
-            // Signal 2: Temporal Motion Delta (Current vs Previous Frame)
-            int prev_r = s_prev_grid[idx].r;
-            int prev_g = s_prev_grid[idx].g;
-            int prev_b = s_prev_grid[idx].b;
-            int d_prev = abs(r - prev_r) + abs(g - prev_g) + abs(b - prev_b);
-            if (d_prev >= 30) {
-                motion_prev_count++;
-            }
-
-            // Signal 3: Orange / Yellow Color Presence
-            // Nerf projectile stands out brightly against dark/black target
-            if ((r + g) >= 155 && b <= 75) {
-                // Yellow foam body: high red & green, low blue
-                bool is_yellow = (r >= 85 && g >= 70 && r >= (b + 22) && g >= (b + 12));
-                // Orange rubber tip: high red, moderate green, low blue
-                bool is_orange = (r >= 95 && g >= 35 && r >= (g + 20) && r >= (b + 28));
-                if (is_yellow || is_orange) {
-                    color_count++;
-                }
-            }
-
-            // Update previous grid for next frame
-            s_prev_grid[idx].r = (uint8_t)r;
-            s_prev_grid[idx].g = (uint8_t)g;
-            s_prev_grid[idx].b = (uint8_t)b;
         }
     }
 
-    int span_x = (delta_ref_count > 0) ? (max_x - min_x) : 0;
-    int span_y = (delta_ref_count > 0) ? (max_y - min_y) : 0;
-    float cx = (delta_ref_count > 0) ? ((float)sum_x / (float)delta_ref_count) : (float)OPTIMAL_ROI_CENTER_X;
-    float cy = (delta_ref_count > 0) ? ((float)sum_y / (float)delta_ref_count) : (float)OPTIMAL_ROI_CENTER_Y;
+    int span_x = (bullet_px_count > 0) ? (max_x - min_x) : 0;
+    int span_y = (bullet_px_count > 0) ? (max_y - min_y) : 0;
+    float cx = (bullet_px_count > 0) ? ((float)sum_x / (float)bullet_px_count) : (float)OPTIMAL_ROI_CENTER_X;
+    float cy = (bullet_px_count > 0) ? ((float)sum_y / (float)bullet_px_count) : (float)OPTIMAL_ROI_CENTER_Y;
 
     *out_x = cx;
     *out_y = cy;
-    *out_delta = (int)delta_ref_count;
+    *out_delta = (int)bullet_px_count;
     *out_color = (int)color_count;
-    *out_motion = (int)motion_prev_count;
+    *out_motion = 0;
 
-    // Signal Checks
-    bool sig_delta = (delta_ref_count >= 18);    // >= ~72 full pixels changed from baseline
-    bool sig_color = (color_count >= 12);        // >= ~48 full pixels of orange/yellow
-    bool sig_motion = (motion_prev_count >= 14);  // >= ~56 full pixels changed in last frame
-    bool sig_spatial = (span_x <= 90 && span_y <= 90 && span_x >= 4 && span_y >= 4);
+    // Spatial bounding and density checks (rejects scattered camera noise or room light flicker)
+    int box_samples = ((span_x / 2) + 1) * ((span_y / 2) + 1);
+    float density = (box_samples > 0) ? ((float)bullet_px_count / (float)box_samples) : 0.0f;
+
+    bool is_compact = (span_x >= 10 && span_x <= 110 && span_y >= 10 && span_y <= 110);
+    bool is_dense = (density >= 0.12f);
+    bool cluster_valid = (bullet_px_count >= 35 && is_compact && is_dense);
 
     bool hit_confirmed = false;
     int confidence = 0;
 
-    // Decision Logic: Correlated Multi-Signal Confirmation
-    if (sig_delta && sig_color && sig_spatial) {
-        hit_confirmed = true;
-        confidence = 100;
-    } else if (sig_delta && sig_motion && sig_spatial && delta_ref_count >= 30) {
-        hit_confirmed = true;
-        confidence = 90;
-    } else if (color_count >= 35 && sig_delta) {
-        hit_confirmed = true;
-        confidence = 95;
+    if (cluster_valid) {
+        // Condition A: Immediate hit if large unmistakable dart with strong color
+        if (bullet_px_count >= 60 && color_count >= 30) {
+            hit_confirmed = true;
+            confidence = 100;
+        } else {
+            // Condition B: 2-frame persistence (when bullet is stuck to the target, it stays in place!)
+            if (s_consec_hit_frames >= 1) {
+                float dx = cx - s_last_hit_cx;
+                float dy = cy - s_last_hit_cy;
+                if ((dx * dx + dy * dy) <= (35.0f * 35.0f)) {
+                    hit_confirmed = true;
+                    confidence = 95;
+                }
+            }
+            s_consec_hit_frames++;
+            s_last_hit_cx = cx;
+            s_last_hit_cy = cy;
+        }
+    } else {
+        s_consec_hit_frames = 0;
     }
 
     float latency_ms = (float)(esp_timer_get_time() - frame_start_us) / 1000.0f;
@@ -706,32 +730,32 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
         // --- 1. IMMEDIATELY DISPATCH REVERSE COMMAND OVER UART ---
         char hit_cmd[64];
         int hlen = snprintf(hit_cmd, sizeof(hit_cmd), "HIT,1,%.0f,%.0f,%lu\n",
-                            cx, cy, (unsigned long)(delta_ref_count * 4));
+                            cx, cy, (unsigned long)(bullet_px_count * 4));
         uart_write_bytes(BRIDGE_UART_NUM, hit_cmd, hlen);
 
         // 2. Dispatch detailed diagnostic telemetry
         char diag_msg[96];
-        int dlen = snprintf(diag_msg, sizeof(diag_msg), "DIAG,HIT,%lu,%lu,%lu,%d,%d,%d,%.1f\n",
-                            (unsigned long)delta_ref_count, (unsigned long)color_count,
-                            (unsigned long)motion_prev_count, span_x, span_y, confidence, latency_ms);
+        int dlen = snprintf(diag_msg, sizeof(diag_msg), "DIAG,HIT,%lu,%lu,0,%d,%d,%d,%.1f\n",
+                            (unsigned long)bullet_px_count, (unsigned long)color_count,
+                            span_x, span_y, confidence, latency_ms);
         uart_write_bytes(BRIDGE_UART_NUM, diag_msg, dlen);
 
         // 3. Immediately lock state to prevent double-triggering
         g_detector_state = DETECTOR_STATE_HIT_LOCKED;
         s_hit_cooldown_until_us = esp_timer_get_time() + 3000000ULL;
 
-        ESP_LOGI("EVENT_DETECTOR", "🎯 >>> HIT CONFIRMED! <<< Pos:(%.0f,%.0f) Span:%dx%d Delta:%lu Color:%lu Motion:%lu Conf:%d%% Latency:%.2fms -> SERVO REVERSED!",
-                 cx, cy, span_x, span_y, (unsigned long)delta_ref_count, (unsigned long)color_count,
-                 (unsigned long)motion_prev_count, confidence, latency_ms);
+        ESP_LOGI("EVENT_DETECTOR", "🎯 >>> HIT CONFIRMED! <<< Pos:(%.0f,%.0f) Span:%dx%d Px:%lu Color:%lu Density:%.2f Conf:%d%% Latency:%.2fms -> SERVO REVERSED!",
+                 cx, cy, span_x, span_y, (unsigned long)bullet_px_count, (unsigned long)color_count,
+                 density, confidence, latency_ms);
         return true;
     } else {
         // Periodic diagnostic telemetry every 6 frames (~100ms)
         if (++s_diag_frame_div >= 6) {
             s_diag_frame_div = 0;
             char diag_msg[96];
-            int dlen = snprintf(diag_msg, sizeof(diag_msg), "DIAG,ARMED,%lu,%lu,%lu,%d,%d,0,0.0\n",
-                                (unsigned long)delta_ref_count, (unsigned long)color_count,
-                                (unsigned long)motion_prev_count, span_x, span_y);
+            int dlen = snprintf(diag_msg, sizeof(diag_msg), "DIAG,ARMED,%lu,%lu,0,%d,%d,0,0.0\n",
+                                (unsigned long)bullet_px_count, (unsigned long)color_count,
+                                span_x, span_y);
             uart_write_bytes(BRIDGE_UART_NUM, diag_msg, dlen);
         }
         return false;

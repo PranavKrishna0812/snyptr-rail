@@ -152,9 +152,9 @@ void executeCommand(String line, bool fromP4 = false) {
       parsedPixels = line.substring(c4 + 1).toInt();
     }
 
-    // Ignore transients if target is already DOWN or still in initial 800ms servo swing
+    // Ignore transients if target is already DOWN or still in initial servo swing
     unsigned long now = millis();
-    if (targetStateStr != "UP" || (now - g_targetUpTimestampMs) < 800) {
+    if (targetStateStr != "UP" || (now - g_targetUpTimestampMs) < 600) {
       return;
     }
 
@@ -217,10 +217,12 @@ void executeCommand(String line, bool fromP4 = false) {
     if (targetId >= 1 && targetId <= 7) {
       int channel = targetId - 1;
       g_hitActive = false;
-      moveServoSmooth(channel, SERVO_UP, 3);
       targetStateStr = "UP";
       g_targetUpTimestampMs = millis();
-      // Command ESP32-P4 to settle and establish reference baseline!
+      moveServoSmooth(channel, SERVO_UP, 3);
+      // Wait for mechanical vibration to settle completely (400ms)
+      delay(400);
+      // NOW and ONLY NOW command ESP32-P4 to calibrate on the stationary upright black target!
       Serial2.println("ARM,1");
       Serial.print("UP_CONFIRMED,");
       Serial.println(targetId);
