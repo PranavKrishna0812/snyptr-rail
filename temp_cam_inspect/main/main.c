@@ -189,25 +189,123 @@ static void get_target_score(float target_x, float target_y, uint8_t *ring, uint
     }
 }
 
-// Background task to receive target homography calibration matrices over UART0
+#define FULL_ROI_X_MIN   30
+#define FULL_ROI_X_MAX   770
+#define FULL_ROI_Y_MIN   30
+#define FULL_ROI_Y_MAX   770
+#define FULL_ROI_STEP    4
+
+#define ROI_GRID_COLS  ((FULL_ROI_X_MAX - FULL_ROI_X_MIN) / FULL_ROI_STEP + 1) // 186
+#define ROI_GRID_ROWS  ((FULL_ROI_Y_MAX - FULL_ROI_Y_MIN) / FULL_ROI_STEP + 1) // 186
+
+typedef enum {
+    DETECTOR_STATE_DOWN = 0,         // Target is lowered / retracted. Detection is LOCKED. Zero calibration.
+    DETECTOR_STATE_CALIBRATING,      // Target is upright & stationary. Averaging 4 frames for reference.
+    DETECTOR_STATE_ARMED,            // Stationary reference established. Continuous full-frame monitoring.
+    DETECTOR_STATE_HIT_LOCKED        // Hit confirmed! Reverse command dispatched. Detection locked.
+} detector_state_t;
+
+typedef struct {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} roi_pixel_t;
+
+// Persistent reference in PSRAM
+static roi_pixel_t *s_ref_grid = NULL;
+static uint16_t *s_accum_r = NULL;
+static uint16_t *s_accum_g = NULL;
+static uint16_t *s_accum_b = NULL;
+
+static detector_state_t g_detector_state = DETECTOR_STATE_DOWN;
+static bool s_ref_ready = false;
+static bool s_byte_swap_needed = false;
+static bool s_swap_calibrated = false;
+static bool s_perm_up_mode = false; // Permanent UP mode: target stays upright on hit and auto-rearms
+
+static int64_t s_hit_cooldown_until_us = 0;
+static int s_ref_accum_frames = 0;
+static int s_flush_frames = 0;
+static int s_diag_frame_div = 0;
+
+static int s_consec_hit_frames = 0;
+static float s_last_hit_cx = 400.0f;
+static float s_last_hit_cy = 400.0f;
+
+// Background task to receive target calibration and forward USB commands over bridge UART
 static void uart_rx_task(void *arg)
 {
     uint8_t buffer[128];
     int idx = 0;
     int64_t last_byte_time = 0;
-    
-    ESP_LOGI("STANDALONE_CV", "UART RX Calibration task started...");
-    
+
+    char line_buf[64];
+    int line_idx = 0;
+
+    ESP_LOGI("STANDALONE_CV", "UART RX task started (supporting calibration & ASCII bridge commands)...");
+
     while (1) {
         uint8_t byte;
         int len = uart_read_bytes(UART_NUM_0, &byte, 1, pdMS_TO_TICKS(10));
         if (len > 0) {
             int64_t now = esp_timer_get_time();
+
+            // Check for ASCII command line framing
+            if (byte == '\n' || byte == '\r') {
+                if (line_idx > 0) {
+                    line_buf[line_idx] = '\0';
+                    char *cmd_str = line_buf;
+                    if (strncmp(cmd_str, "CMD:", 4) == 0) {
+                        cmd_str += 4;
+                    }
+
+                    if (strstr(cmd_str, "PERM_UP,1") != NULL || strstr(cmd_str, "PERM_UP_ON") != NULL) {
+                        s_perm_up_mode = true;
+                        ESP_LOGI("STANDALONE_CV", ">>> [PERM_UP_ON] received on USB! Forwarding to Pop ESP32... <<<");
+                        const char *fwd = "PERM_UP,1\n";
+                        uart_write_bytes(BRIDGE_UART_NUM, fwd, strlen(fwd));
+                    } else if (strstr(cmd_str, "PERM_UP,0") != NULL || strstr(cmd_str, "PERM_UP_OFF") != NULL) {
+                        s_perm_up_mode = false;
+                        ESP_LOGI("STANDALONE_CV", ">>> [PERM_UP_OFF] received on USB! Forwarding to Pop ESP32... <<<");
+                        const char *fwd = "PERM_UP,0\n";
+                        uart_write_bytes(BRIDGE_UART_NUM, fwd, strlen(fwd));
+                    } else if (strstr(cmd_str, "UP,") != NULL) {
+                        ESP_LOGI("STANDALONE_CV", ">>> [UP] received on USB! Forwarding to Pop ESP32... <<<");
+                        char fwd[32];
+                        int flen = snprintf(fwd, sizeof(fwd), "%s\n", cmd_str);
+                        uart_write_bytes(BRIDGE_UART_NUM, fwd, flen);
+                    } else if (strstr(cmd_str, "DOWN,") != NULL) {
+                        s_perm_up_mode = false;
+                        g_detector_state = DETECTOR_STATE_DOWN;
+                        ESP_LOGI("STANDALONE_CV", ">>> [DOWN] received on USB! Forwarding to Pop ESP32... <<<");
+                        char fwd[32];
+                        int flen = snprintf(fwd, sizeof(fwd), "%s\n", cmd_str);
+                        uart_write_bytes(BRIDGE_UART_NUM, fwd, flen);
+                    } else if (strstr(cmd_str, "ARM") != NULL) {
+                        g_detector_state = DETECTOR_STATE_CALIBRATING;
+                        s_flush_frames = 3;
+                        s_ref_accum_frames = 0;
+                        s_ref_ready = false;
+                        char fwd[32];
+                        int flen = snprintf(fwd, sizeof(fwd), "%s\n", cmd_str);
+                        uart_write_bytes(BRIDGE_UART_NUM, fwd, flen);
+                    }
+                    line_idx = 0;
+                }
+            } else if (byte >= 32 && byte <= 126) {
+                if (line_idx < (int)sizeof(line_buf) - 1) {
+                    line_buf[line_idx++] = (char)byte;
+                } else {
+                    line_idx = 0;
+                }
+            }
+
+            // Check for binary homography calibration packet
             if (idx > 0 && (now - last_byte_time > 100000)) { // 100ms packet timeout
                 idx = 0;
             }
             last_byte_time = now;
-            
+
             if (idx == 0) {
                 if (byte == 0xCC) {
                     buffer[idx++] = byte;
@@ -222,13 +320,13 @@ static void uart_rx_task(void *arg)
                 buffer[idx++] = byte;
             } else if (idx == 38) {
                 buffer[idx] = byte;
-                
+
                 // Verify XOR checksum
                 uint8_t check = 0;
                 for (int i = 1; i < 38; i++) {
                     check ^= buffer[i];
                 }
-                
+
                 if (check == buffer[38]) {
                     memcpy(g_homography, &buffer[2], 36);
                     g_is_calibrated = true;
@@ -397,48 +495,6 @@ static void set_camera_exposure_target(int value)
 // ============================================================================
 
 #define FULL_ROI_X_MIN   30
-#define FULL_ROI_X_MAX   770
-#define FULL_ROI_Y_MIN   30
-#define FULL_ROI_Y_MAX   770
-#define FULL_ROI_STEP    4
-
-#define ROI_GRID_COLS  ((FULL_ROI_X_MAX - FULL_ROI_X_MIN) / FULL_ROI_STEP + 1) // 186
-#define ROI_GRID_ROWS  ((FULL_ROI_Y_MAX - FULL_ROI_Y_MIN) / FULL_ROI_STEP + 1) // 186
-
-typedef enum {
-    DETECTOR_STATE_DOWN = 0,         // Target is lowered / retracted. Detection is LOCKED. Zero calibration.
-    DETECTOR_STATE_CALIBRATING,      // Target is upright & stationary. Averaging 4 frames for reference.
-    DETECTOR_STATE_ARMED,            // Stationary reference established. Continuous full-frame monitoring.
-    DETECTOR_STATE_HIT_LOCKED        // Hit confirmed! Reverse command dispatched. Detection locked.
-} detector_state_t;
-
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-} roi_pixel_t;
-
-// Persistent reference in PSRAM
-static roi_pixel_t *s_ref_grid = NULL;
-static uint16_t *s_accum_r = NULL;
-static uint16_t *s_accum_g = NULL;
-static uint16_t *s_accum_b = NULL;
-
-static detector_state_t g_detector_state = DETECTOR_STATE_DOWN;
-static bool s_ref_ready = false;
-static bool s_byte_swap_needed = false;
-static bool s_swap_calibrated = false;
-static bool s_perm_up_mode = false; // Permanent UP mode: target stays upright on hit and auto-rearms
-
-static int64_t s_hit_cooldown_until_us = 0;
-static int s_ref_accum_frames = 0;
-static int s_flush_frames = 0;
-static int s_diag_frame_div = 0;
-
-static int s_consec_hit_frames = 0;
-static float s_last_hit_cx = 400.0f;
-static float s_last_hit_cy = 400.0f;
-
 #define STANDALONE_NO_VIDEO_STREAM 0
 
 static inline void unpack_rgb565(uint16_t p, bool swap, int *r, int *g, int *b)

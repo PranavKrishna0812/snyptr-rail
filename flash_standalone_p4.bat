@@ -1,5 +1,6 @@
 @echo off
 setlocal
+set "ORIG_PATH=%PATH%"
 
 echo ===========================================================================
 echo       SNYPTR-RAIL: AUTOMATIC COMPILE ^& FLASH TO ESP32-P4
@@ -61,6 +62,12 @@ echo   SUCCESS: ESP32-P4 COMPILED AND FLASHED SUCCESSFULLY!
 echo ===========================================================================
 echo.
 cd /d "%~dp0"
-echo Launching live camera feed viewer in 2 seconds...
+
+:: Restore system PATH so IDF python environment does not shadow user's Python packages
+set "PATH=%ORIG_PATH%"
+set "USER_PYTHON=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+if not exist "%USER_PYTHON%" set "USER_PYTHON=python"
+
+echo Launching live camera feed viewer in 2 seconds (using %USER_PYTHON%)...
 ping -n 3 127.0.0.1 >nul
-start cmd /k "python view_camera_live.py"
+start cmd /k "cd /d "%~dp0" && "%USER_PYTHON%" view_camera_live.py"

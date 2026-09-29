@@ -79,13 +79,27 @@ def speak_phrase_async(text):
         pass
 
 def send_cmd(action):
-    try:
-        url = f"{ESP32_WIFI_URL}/cmd?action={action}"
-        req = urllib.request.Request(url, headers={"User-Agent": "SnyptrLive/2.0"})
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            return resp.read().decode('utf-8', errors='ignore')
-    except Exception as e:
-        return f"ERR: {e}"
+    # 1. Send immediately over wired USB Serial (Direct wire to P4 -> bridged to Pop ESP32)
+    with g_state.lock:
+        ser = g_state.serial_handle
+    if ser and ser.is_open:
+        try:
+            ser.write(f"CMD:{action}\n".encode('ascii'))
+            ser.flush()
+        except Exception:
+            pass
+
+    # 2. Also dispatch over Wi-Fi in background thread so UI never blocks
+    def _wifi_send():
+        try:
+            url = f"{ESP32_WIFI_URL}/cmd?action={action}"
+            req = urllib.request.Request(url, headers={"User-Agent": "SnyptrLive/2.0"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                pass
+        except Exception:
+            pass
+    threading.Thread(target=_wifi_send, daemon=True).start()
+    return "SENT"
 
 class SharedMonitorState:
     def __init__(self):
@@ -96,6 +110,7 @@ class SharedMonitorState:
         self.last_frame_time = 0.0
         self.serial_connected = False
         self.serial_port = DEFAULT_COM_PORT
+        self.serial_handle = None
 
         # Wi-Fi Telemetry
         self.wifi_connected = False
@@ -209,7 +224,8 @@ def wifi_telemetry_thread_func():
                 g_state.span_y = data.get("spanY", 0)
                 g_state.confidence = data.get("confidence", 0)
                 g_state.latency_ms = data.get("latencyMs", 0.0)
-                g_state.permanent_up = data.get("permanentUp", data.get("permUp", False))
+                if "permanentUp" in data or "permUp" in data:
+                    g_state.permanent_up = data.get("permanentUp", data.get("permUp", False))
 
                 # Scale coordinates if hit reported
                 if g_state.hit:
@@ -257,6 +273,7 @@ def p4_serial_reader_thread_func():
             with g_state.lock:
                 g_state.serial_connected = True
                 g_state.serial_port = port_to_try
+                g_state.serial_handle = ser
             print(f"[P4 COM] >>> Connected to ESP32-P4 on {port_to_try} @ {DEFAULT_BAUD} baud! Streaming camera feed... <<<")
 
             buffer = bytearray()
@@ -344,10 +361,17 @@ def toggle_permanent_up():
     with g_state.lock:
         new_state = not g_state.permanent_up
         g_state.permanent_up = new_state
-    cmd = "PERM_UP,1" if new_state else "PERM_UP,0"
-    res = send_cmd(cmd)
-    status_str = "ENABLED (Target stays upright continuously)" if new_state else "DISABLED (Target drops on hit)"
-    print(f"\n\033[93m[🎯 PERMANENT UP] Mode set to {status_str} ({cmd}) -> {res}\033[0m")
+    
+    if new_state:
+        send_cmd("PERM_UP,1")
+        send_cmd("UP,1") # Raise target immediately
+        status_str = "ENABLED (Target raised & stays up continuously)"
+    else:
+        send_cmd("PERM_UP,0")
+        send_cmd("DOWN,1") # Lower target
+        status_str = "DISABLED (Target lowered)"
+        
+    print(f"\n\033[93m[🎯 PERMANENT UP] Mode set to {status_str}\033[0m")
 
 def render_tactical_canvas():
     """Draws a high-tech tactical HUD overlay on the camera frame or synthetic canvas."""
