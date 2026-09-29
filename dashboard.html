@@ -1715,28 +1715,24 @@
           const px = data.dartPixels || 0;
           const yPx = data.yellowPx || 0;
           const oPx = data.orangePx || 0;
+          const deltaPx = data.deltaPx || 0;
+          const colorPx = data.colorPx || 0;
+          const motionPx = data.motionPx || 0;
+          const latencyMs = data.latencyMs || 0;
+          const detState = data.detectorState || data.targetState || "DOWN";
           const p4Link = !!data.p4Link;
+
           setStandaloneLinkBadge(true, p4Link
-            ? `WIFI ONLINE • P4 Y${yPx}/O${oPx}`
+            ? `WIFI ONLINE • P4 [${detState}] Δ:${deltaPx} C:${colorPx} M:${motionPx}`
             : "WIFI ONLINE • P4 READY");
 
-          if (elevationState === 'UP' && timeSincePop < 750 && data.hit) {
-            window.ignoredWifiStaticPos = { x: hx, y: hy, px: px };
+          if (telem) {
+            telem.textContent = `P4 CV: ${detState} // Δ:${deltaPx}px COLOR:${colorPx}px LAT:${latencyMs.toFixed(1)}ms`;
+            telem.setAttribute("fill", data.hit ? "#2cff55" : (detState === "ARMED" ? "#ffcc00" : "#a5b592"));
           }
 
           if (data.hit && isArmedAndSettled) {
-            const isFallbackNoise = (hx === 80 && hy === 80 && px === 0);
-            let isUnchangedStatic = false;
-            if (window.ignoredWifiStaticPos) {
-              const dx = Math.abs(hx - window.ignoredWifiStaticPos.x);
-              const dy = Math.abs(hy - window.ignoredWifiStaticPos.y);
-              if (dx <= 6 && dy <= 6 && px <= window.ignoredWifiStaticPos.px + 25) {
-                isUnchangedStatic = true;
-              }
-            }
-            if (!isFallbackNoise && !isUnchangedStatic) {
-              handleNerfBulletStuck(hx, hy, 0, true, `P4 ONBOARD CV (${px} PX)`);
-            }
+            handleNerfBulletStuck(hx, hy, 0, true, `P4 EVENT CV (${px} PX, ${latencyMs.toFixed(1)}ms)`);
           }
         } else {
           setStandaloneLinkBadge(false, "WIFI OFFLINE");

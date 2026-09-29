@@ -2880,32 +2880,24 @@
           const hy = (typeof data.y === "number" && data.y > 0) ? data.y : 80;
           const px = data.dartPixels || 0;
 
+          const deltaPx = data.deltaPx || 0;
+          const colorPx = data.colorPx || 0;
+          const motionPx = data.motionPx || 0;
+          const latencyMs = data.latencyMs || 0;
+          const detState = data.detectorState || data.targetState || "DOWN";
+
           const dot = document.getElementById("camStatusDot");
           const badge = document.getElementById("camStatusBadge");
-          if (dot) dot.style.backgroundColor = "#2cff55";
+          if (dot) dot.style.backgroundColor = data.hit ? "#2cff55" : (detState === "ARMED" ? "#ffcc00" : "#a5b592");
           if (badge) {
-            badge.innerText = data.p4Link ? "WIFI ONLINE • P4 READY" : "WIFI ONLINE";
+            badge.innerText = data.p4Link
+              ? `WIFI ONLINE • P4 [${detState}] Δ:${deltaPx} C:${colorPx} L:${latencyMs.toFixed(1)}ms`
+              : "WIFI ONLINE";
             badge.style.color = "var(--mil-hit)";
           }
 
-          // Record any static pre-existing coordinates during the first 750ms after pop-up
-          if (elevationState === 'UP' && timeSincePop < 750 && data.hit) {
-            window.ignoredWifiStaticPos = { x: hx, y: hy, px: px };
-          }
-
           if (data.hit && isArmedAndSettled) {
-            const isFallbackNoise = (hx === 80 && hy === 80 && px === 0);
-            let isUnchangedStatic = false;
-            if (window.ignoredWifiStaticPos) {
-              const dx = Math.abs(hx - window.ignoredWifiStaticPos.x);
-              const dy = Math.abs(hy - window.ignoredWifiStaticPos.y);
-              if (dx <= 6 && dy <= 6 && px <= window.ignoredWifiStaticPos.px + 25) {
-                isUnchangedStatic = true;
-              }
-            }
-            if (!isFallbackNoise && !isUnchangedStatic) {
-              handleNerfBulletStuck(hx, hy, 0, true, `WIFI STANDALONE CV (${px} PX)`);
-            }
+            handleNerfBulletStuck(hx, hy, 0, true, `P4 EVENT CV (${px} PX, ${latencyMs.toFixed(1)}ms)`);
           }
         }
       } catch (e) {
