@@ -51,7 +51,7 @@ static const char *TAG = "P4_UART_STREAM";
 #define USB_TEST_PAYLOAD_SIZE   4096
 
 // TARGET STREAM RATE (FPS) - Paces the stream to not overload the UART bandwidth
-#define STREAM_MAX_FPS          12
+#define STREAM_MAX_FPS          20
 
 // I2C Pin definitions for ESP32-P4 Pico board (Camera)
 #define I2C_MASTER_SCL_IO   GPIO_NUM_8
@@ -437,7 +437,7 @@ static int s_consec_hit_frames = 0;
 static float s_last_hit_cx = 400.0f;
 static float s_last_hit_cy = 240.0f;
 
-#define STANDALONE_NO_VIDEO_STREAM 1
+#define STANDALONE_NO_VIDEO_STREAM 0
 
 static inline void unpack_rgb565(uint16_t p, bool swap, int *r, int *g, int *b)
 {
@@ -957,108 +957,60 @@ static void camera_stream_task(void *arg)
         if (ioctl(g_video_fd, VIDIOC_DQBUF, &buf) == 0) {
             frame_count++;
             
-            #if !STANDALONE_NO_VIDEO_STREAM
-            // Pace the frame stream to target FPS only when streaming video
-            int64_t now = esp_timer_get_time();
-            if (now - last_transmit_time < frame_interval_us) {
-                ioctl(g_video_fd, VIDIOC_QBUF, &buf);
-                continue;
-            }
-            last_transmit_time = now;
-            #endif
-
             stat_captured++;
 
             uint8_t *frame_ptr = g_buffers[buf.index];
             uint32_t out_len = buf.bytesused;
 
             if (frame_ptr != NULL && out_len > 0) {
-                // --- HIGH-SPEED DETERMINISTIC EVENT DETECTION PIPELINE ---
+                // --- 1. HIGH-SPEED DETERMINISTIC EVENT DETECTION (EVERY FRAME) ---
                 uint16_t *pixels = (uint16_t *)frame_ptr;
                 float hit_x = 0.0f, hit_y = 0.0f;
                 int hit_delta = 0, hit_color = 0, hit_motion = 0;
                 process_target_event_frame(pixels, 800, 800, &hit_x, &hit_y, &hit_delta, &hit_color, &hit_motion);
 
                 #if !STANDALONE_NO_VIDEO_STREAM
-                // Encode RAW8 to JPEG (Grayscale)
-                jpeg_encode_cfg_t enc_config = {
-                    .src_type = JPEG_ENCODE_IN_FORMAT_RGB565,
-                    .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
-                    .image_quality = 35,
-                    .width = 800,
-                    .height = 800,
-                };
-                
-                uint32_t jpeg_encoded_size = 0;
-                esp_err_t ret = jpeg_encoder_process(g_jpeg_handle, &enc_config, frame_ptr, out_len, g_jpeg_out_buf, g_jpeg_out_size, &jpeg_encoded_size);
-                
-                if (ret == ESP_OK && jpeg_encoded_size > 0) {
-                    // Verify JPEG integrity
-                    bool jpeg_ok = (jpeg_encoded_size >= 4 &&
-                                    g_jpeg_out_buf[0] == 0xFF &&
-                                    g_jpeg_out_buf[1] == 0xD8);
-                    
-                    bool has_ffd9 = false;
-                    if (jpeg_ok) {
-                        for (int idx = (int)jpeg_encoded_size - 1; idx >= (int)jpeg_encoded_size - 10 && idx >= 0; idx--) {
-                            if (idx > 0 && g_jpeg_out_buf[idx-1] == 0xFF && g_jpeg_out_buf[idx] == 0xD9) {
-                                has_ffd9 = true;
-                                break;
-                            }
-                        }
-                    }
+                // --- 2. PACED JPEG VIDEO STREAMING OVER UART0 (COM PORT) ---
+                int64_t now_stream = esp_timer_get_time();
+                if (now_stream - last_transmit_time >= frame_interval_us) {
+                    last_transmit_time = now_stream;
 
-                    if (jpeg_ok) {
+                    jpeg_encode_cfg_t enc_config = {
+                        .src_type = JPEG_ENCODE_IN_FORMAT_RGB565,
+                        .sub_sample = JPEG_DOWN_SAMPLING_YUV420,
+                        .image_quality = 35,
+                        .width = 800,
+                        .height = 800,
+                    };
+                    
+                    uint32_t jpeg_encoded_size = 0;
+                    esp_err_t ret = jpeg_encoder_process(g_jpeg_handle, &enc_config, frame_ptr, out_len, g_jpeg_out_buf, g_jpeg_out_size, &jpeg_encoded_size);
+                    
+                    if (ret == ESP_OK && jpeg_encoded_size > 0 &&
+                        g_jpeg_out_buf[0] == 0xFF && g_jpeg_out_buf[1] == 0xD8) {
+                        
                         stat_encoded++;
                         stat_jpeg_bytes_total += jpeg_encoded_size;
 
-                        if (!has_ffd9) {
-                            ESP_LOGW(TAG, "JPEG: FF D9 marker not found in trailing 10 bytes of frame %d", frame_count);
-                        }
-
-                        // Inject Trailing 32-byte Metadata Steganographically
                         shot_metadata_t meta = {
                             .magic = {0xDE, 0xAD, 0xBE, 0xEF},
-                            .laser_found = valid_laser_on_card ? 1 : 0,
-                            .zone = zone,
-                            .score_ring = ring,
-                            .is_calibrated = g_is_calibrated ? 1 : 0,
-                            .laser_x_px = (uint16_t)laser_x,
-                            .laser_y_px = (uint16_t)laser_y,
-                            .laser_x_mm = target_x,
-                            .laser_y_mm = target_y,
-                            .laser_dist_mm = distance
+                            .laser_found = (hit_delta > 0) ? 1 : 0,
+                            .zone = 1,
+                            .score_ring = 10,
+                            .is_calibrated = 1,
+                            .laser_x_px = (uint16_t)hit_x,
+                            .laser_y_px = (uint16_t)hit_y,
+                            .laser_x_mm = 0.0f,
+                            .laser_y_mm = 0.0f,
+                            .laser_dist_mm = (float)hit_delta
                         };
                         
-                        // Append metadata immediately after the JPEG data
                         memcpy(g_jpeg_out_buf + jpeg_encoded_size, &meta, sizeof(meta));
                         uint32_t total_payload_len = jpeg_encoded_size + sizeof(meta);
-
-                        #if !CAMERA_TEST_MODE
-                            #if SINGLE_FRAME_TEST_MODE
-                                static bool single_frame_sent = false;
-                                if (!single_frame_sent) {
-                                    send_packet(frame_count, g_jpeg_out_buf, total_payload_len);
-                                    single_frame_sent = true;
-                                    stat_transmitted++;
-                                    stat_tx_bytes_total += (15 + total_payload_len);
-                                    ESP_LOGI(TAG, "SINGLE_FRAME_TEST_MODE: Sent first frame, stopping further transmission.");
-                                }
-                            #else
-                                send_packet(frame_count, g_jpeg_out_buf, total_payload_len);
-                                stat_transmitted++;
-                                stat_tx_bytes_total += (15 + total_payload_len);
-                            #endif
-                        #else
-                            // In Camera-only test mode, print captured size to USB serial without sending it over UART
-                            printf("Frame %d | JPEG size: %lu\n", frame_count, jpeg_encoded_size);
-                        #endif
-                    } else {
-                        ESP_LOGE(TAG, "JPEG check failed (size=%lu, start=%02X%02X)", 
-                                 jpeg_encoded_size, g_jpeg_out_buf[0], g_jpeg_out_buf[1]);
+                        send_packet(frame_count, g_jpeg_out_buf, total_payload_len);
+                        stat_transmitted++;
+                        stat_tx_bytes_total += (15 + total_payload_len);
                     }
-                } else {
-                    ESP_LOGE(TAG, "JPEG Encode failed: %s", esp_err_to_name(ret));
                 }
                 #endif // !STANDALONE_NO_VIDEO_STREAM
             }

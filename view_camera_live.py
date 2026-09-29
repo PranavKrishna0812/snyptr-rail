@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
 """
 ===============================================================================
-SNYPTR-RAIL: HIGH-SPEED DETERMINISTIC EVENT DETECTION MONITOR
+SNYPTR-RAIL: HIGH-SPEED CAMERA LIVE FEED & TARGET EVENT MONITOR
 ===============================================================================
-Polls live target telemetry from the Pop-Up ESP32 over Wi-Fi (http://192.168.4.1).
-Exposes real-time multi-signal detector debug metrics:
-  - Current System State (DOWN, RISING, ARMED, HIT_LOCKED)
-  - Optimal ROI & Reference ROI status
-  - Signal 1: Reference Pixel Delta count vs threshold
-  - Signal 2: Orange / Yellow Color Mass vs threshold
-  - Signal 3: Temporal Motion Delta (frame-to-frame change)
-  - Signal 4: Spatial Concentration (Bounding Box Span X x Y)
-  - Verdict, Confidence Score & Exact Detection Latency (ms)
-
-Controls:
-  [u] or [0]          : Raise & Arm Target (UP,1)
-  [d]                 : Lower & Disarm Target (DOWN,1)
-  [`] (Backtick key)  : Manual Hit Override
-  [q] or [Ctrl+C]     : Exit Monitor
+1. Streams real-time 800x800 camera feed directly from ESP32-P4 over USB (COM17 @ 3Mbaud).
+2. Overlays the calibrated Optimal Target Zone (ROI Ellipse: Center 400,240, Rx=140, Ry=130).
+3. Connects to Pop-Up Target ESP32 over Wi-Fi (http://192.168.4.1) for telemetry & commands.
+4. Interactive Controls:
+     [u] or [0]          : Pop Up & Arm Target (UP,1)
+     [d]                 : Lower Target (DOWN,1)
+     [`] (Backtick)      : Manual Hit Override (random sound announcement)
+     [q] or [Esc]        : Exit Monitor
 ===============================================================================
 """
 
@@ -25,9 +18,25 @@ import sys
 import time
 import json
 import random
+import struct
+import zlib
 import urllib.request
 import subprocess
-import os
+import threading
+import numpy as np
+
+try:
+    import cv2
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+
+try:
+    import serial
+    import serial.tools.list_ports
+    HAS_SERIAL = True
+except ImportError:
+    HAS_SERIAL = False
 
 try:
     import msvcrt
@@ -35,7 +44,15 @@ try:
 except ImportError:
     HAS_MSVCRT = False
 
-ESP32_HOST = "http://192.168.4.1"
+DEFAULT_COM_PORT = "COM17"
+DEFAULT_BAUD = 3000000
+ESP32_WIFI_URL = "http://192.168.4.1"
+
+# Target Optimal ROI Specifications (calibrated on upright black target)
+ROI_CX = 400
+ROI_CY = 240
+ROI_RX = 140
+ROI_RY = 130
 
 HIT_PHRASES = [
     "Target hit! Bullseye!",
@@ -63,21 +80,184 @@ def speak_phrase_async(text):
 
 def send_cmd(action):
     try:
-        url = f"{ESP32_HOST}/cmd?action={action}"
+        url = f"{ESP32_WIFI_URL}/cmd?action={action}"
         req = urllib.request.Request(url, headers={"User-Agent": "SnyptrLive/2.0"})
         with urllib.request.urlopen(req, timeout=1.5) as resp:
             return resp.read().decode('utf-8', errors='ignore')
     except Exception as e:
         return f"ERR: {e}"
 
-def poll_telemetry():
-    try:
-        url = f"{ESP32_HOST}/telemetry"
-        req = urllib.request.Request(url, headers={"User-Agent": "SnyptrLive/2.0"})
-        with urllib.request.urlopen(req, timeout=0.8) as resp:
-            return json.loads(resp.read().decode('utf-8', errors='ignore'))
-    except Exception:
-        return None
+class SharedMonitorState:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.latest_frame = None
+        self.frame_id = 0
+        self.fps = 0.0
+        self.last_frame_time = 0.0
+        self.serial_connected = False
+        self.serial_port = DEFAULT_COM_PORT
+
+        # Wi-Fi Telemetry
+        self.wifi_connected = False
+        self.target_state = "DOWN"
+        self.detector_state = "DOWN"
+        self.hit = False
+        self.hit_x = 400
+        self.hit_y = 240
+        self.hit_pixels = 0
+        self.delta_px = 0
+        self.color_px = 0
+        self.span_x = 0
+        self.span_y = 0
+        self.confidence = 0
+        self.latency_ms = 0.0
+        self.last_hit_timestamp = 0.0
+
+g_state = SharedMonitorState()
+
+def wifi_telemetry_thread_func():
+    """Polls http://192.168.4.1/telemetry in background thread."""
+    last_hit_reported = False
+    while True:
+        try:
+            req = urllib.request.Request(f"{ESP32_WIFI_URL}/telemetry", headers={"User-Agent": "SnyptrLive/2.0"})
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                data = json.loads(resp.read().decode('utf-8', errors='ignore'))
+            
+            with g_state.lock:
+                g_state.wifi_connected = True
+                g_state.hit = data.get("hit", False)
+                g_state.target_state = data.get("targetState", "UNKNOWN")
+                g_state.detector_state = data.get("detectorState", "DOWN")
+                g_state.delta_px = data.get("deltaPx", 0)
+                g_state.color_px = data.get("colorPx", 0)
+                g_state.span_x = data.get("spanX", 0)
+                g_state.span_y = data.get("spanY", 0)
+                g_state.confidence = data.get("confidence", 0)
+                g_state.latency_ms = data.get("latencyMs", 0.0)
+
+                # Scale coordinates if hit reported
+                if g_state.hit:
+                    # x and y from telemetry are scaled to 160x160; scale up to 800x800
+                    g_state.hit_x = int(data.get("x", 80) * (800 / 160))
+                    g_state.hit_y = int(data.get("y", 48) * (800 / 160))
+                    g_state.hit_pixels = data.get("dartPixels", 0)
+                    if not last_hit_reported:
+                        g_state.last_hit_timestamp = time.time()
+
+            if g_state.hit and not last_hit_reported:
+                phrase = random.choice(HIT_PHRASES)
+                speak_phrase_async(phrase)
+                last_hit_reported = True
+            elif not g_state.hit:
+                last_hit_reported = False
+
+            time.sleep(0.08)
+        except Exception:
+            with g_state.lock:
+                g_state.wifi_connected = False
+            time.sleep(0.5)
+
+def find_active_p4_port():
+    """Detects available COM ports to find ESP32-P4."""
+    if not HAS_SERIAL:
+        return DEFAULT_COM_PORT
+    ports = [p.device for p in serial.tools.list_ports.comports()]
+    if DEFAULT_COM_PORT in ports:
+        return DEFAULT_COM_PORT
+    if ports:
+        return ports[0]
+    return DEFAULT_COM_PORT
+
+def p4_serial_reader_thread_func():
+    """Reads binary packet stream from ESP32-P4 UART0 over COM port."""
+    if not HAS_SERIAL:
+        return
+
+    while True:
+        port_to_try = find_active_p4_port()
+        ser = None
+        try:
+            ser = serial.Serial(port_to_try, DEFAULT_BAUD, timeout=0.2)
+            with g_state.lock:
+                g_state.serial_connected = True
+                g_state.serial_port = port_to_try
+            print(f"[P4 COM] >>> Connected to ESP32-P4 on {port_to_try} @ {DEFAULT_BAUD} baud! Streaming camera feed... <<<")
+
+            buffer = bytearray()
+            last_fps_calc = time.time()
+            fps_frame_counter = 0
+
+            while ser.is_open:
+                in_waiting = ser.in_waiting
+                if in_waiting > 131072:
+                    ser.reset_input_buffer()
+                    buffer.clear()
+                    continue
+
+                chunk = ser.read(in_waiting if in_waiting > 0 else 1)
+                if chunk:
+                    buffer.extend(chunk)
+
+                # Search for packet header: 0xAA 0x55 0x01
+                while len(buffer) >= 15:
+                    if buffer[0] == 0xAA and buffer[1] == 0x55 and buffer[2] == 0x01:
+                        frame_id = struct.unpack('<I', buffer[3:7])[0]
+                        payload_len = struct.unpack('<I', buffer[7:11])[0]
+                        received_crc = struct.unpack('<I', buffer[11:15])[0]
+
+                        if payload_len > 400000 or payload_len == 0:
+                            buffer = buffer[1:]
+                            continue
+
+                        total_len = 15 + payload_len
+                        if len(buffer) < total_len:
+                            break # Wait for full packet
+
+                        payload = bytes(buffer[15:total_len])
+                        buffer = buffer[total_len:]
+
+                        # Verify CRC32
+                        calc_crc = zlib.crc32(payload) & 0xFFFFFFFF
+                        if calc_crc == received_crc:
+                            # Strip optional 32-byte metadata if appended at end
+                            img_bytes = payload
+                            hit_marker = False
+                            if len(payload) >= 32 and payload[-32:-28] == b'\xDE\xAD\xBE\xEF':
+                                img_bytes = payload[:-32]
+                                hit_marker = (payload[-31] == 1)
+
+                            if HAS_OPENCV:
+                                np_arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                                decoded = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                                if decoded is not None:
+                                    now = time.time()
+                                    fps_frame_counter += 1
+                                    if now - last_fps_calc >= 1.0:
+                                        with g_state.lock:
+                                            g_state.fps = round(fps_frame_counter / (now - last_fps_calc), 1)
+                                        fps_frame_counter = 0
+                                        last_fps_calc = now
+
+                                    with g_state.lock:
+                                        g_state.latest_frame = decoded
+                                        g_state.frame_id = frame_id
+                                        g_state.last_frame_time = now
+                                        if hit_marker:
+                                            g_state.hit = True
+                        continue
+                    else:
+                        buffer = buffer[1:]
+        except Exception:
+            with g_state.lock:
+                g_state.serial_connected = False
+            time.sleep(1.0)
+        finally:
+            if ser and ser.is_open:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
 
 def trigger_manual_hit_override():
     res = send_cmd("DOWN,1")
@@ -85,143 +265,190 @@ def trigger_manual_hit_override():
     print(f"\n\033[92m[🎯 MANUAL OVERRIDE (`)] {phrase} | Target LOWERED (DOWN,1) -> {res}\033[0m")
     speak_phrase_async(phrase)
 
-def render_gauge(value, max_val=60, width=16, pass_thresh=18):
-    clamped = min(value, max_val)
-    filled = int((clamped / max_val) * width) if max_val > 0 else 0
-    empty = width - filled
-    bar = "█" * filled + "░" * empty
-    color = "\033[92m" if value >= pass_thresh else "\033[90m"
-    return f"{color}[{bar}]\033[0m {value:>3d}"
+def render_tactical_canvas():
+    """Draws a high-tech tactical HUD overlay on the camera frame or synthetic canvas."""
+    with g_state.lock:
+        frame = g_state.latest_frame.copy() if g_state.latest_frame is not None else None
+        target_state = g_state.target_state
+        detector_state = g_state.detector_state
+        hit = g_state.hit
+        hit_x = g_state.hit_x
+        hit_y = g_state.hit_y
+        hit_pixels = g_state.hit_pixels
+        delta_px = g_state.delta_px
+        color_px = g_state.color_px
+        span_x = g_state.span_x
+        span_y = g_state.span_y
+        confidence = g_state.confidence
+        latency_ms = g_state.latency_ms
+        fps = g_state.fps
+        serial_conn = g_state.serial_connected
+        port = g_state.serial_port
+        wifi_conn = g_state.wifi_connected
 
-def clear_screen():
-    # ANSI clear screen or fallback
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
+    # If no physical camera frame received yet, create an 800x800 dark canvas
+    if frame is None:
+        frame = np.zeros((800, 800, 3), dtype=np.uint8)
+        frame[:] = (18, 22, 18) # Dark tactical background
+        
+        # Grid lines
+        for y in range(100, 800, 100):
+            cv2.line(frame, (0, y), (800, y), (28, 36, 28), 1)
+        for x in range(100, 800, 100):
+            cv2.line(frame, (x, 0), (x, 800), (28, 36, 28), 1)
+
+        cv2.putText(frame, "WAITING FOR CAMERA VIDEO STREAM (COM17 @ 3MBAUD)...",
+                    (90, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, "Connect ESP32-P4 USB cable & flash standalone firmware.",
+                    (110, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 180, 160), 1, cv2.LINE_AA)
+
+    # 1. Draw Optimal Target ROI Ellipse (Center 400,240, Rx=140, Ry=130)
+    if hit:
+        roi_color = (0, 0, 255) # Bright Red on HIT
+        roi_thickness = 4
+        status_label = "HIT CONFIRMED!"
+        status_color = (0, 0, 255)
+    elif target_state == "UP" and detector_state == "ARMED":
+        roi_color = (0, 255, 60) # High-visibility Green when ARMED
+        roi_thickness = 3
+        status_label = "DETECTION ARMED"
+        status_color = (0, 255, 60)
+    elif target_state == "UP":
+        roi_color = (0, 220, 255) # Yellow when CALIBRATING / RISING
+        roi_thickness = 2
+        status_label = "CALIBRATING BASELINE"
+        status_color = (0, 220, 255)
+    else:
+        roi_color = (120, 120, 120) # Gray when DOWN
+        roi_thickness = 2
+        status_label = "TARGET DOWN (IDLE)"
+        status_color = (160, 160, 160)
+
+    # Draw ROI Ellipse
+    cv2.ellipse(frame, (ROI_CX, ROI_CY), (ROI_RX, ROI_RY), 0, 0, 360, roi_color, roi_thickness, cv2.LINE_AA)
+    # Reticle crosshair inside ROI
+    cv2.line(frame, (ROI_CX - 15, ROI_CY), (ROI_CX + 15, ROI_CY), roi_color, 1, cv2.LINE_AA)
+    cv2.line(frame, (ROI_CX, ROI_CY - 15), (ROI_CX, ROI_CY + 15), roi_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, "OPTIMAL ZONE", (ROI_CX - 62, ROI_CY - ROI_RY - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.50, roi_color, 1, cv2.LINE_AA)
+
+    # 2. Draw Hit / Detected Projectile Indicator
+    if hit or (span_x > 0 and span_y > 0):
+        # Draw bounding box and crosshair
+        hx, hy = max(10, min(790, hit_x)), max(10, min(790, hit_y))
+        cv2.circle(frame, (hx, hy), 18, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.circle(frame, (hx, hy), 4, (0, 180, 255), -1, cv2.LINE_AA)
+        cv2.putText(frame, f"IMPACT ({hx},{hy})", (hx + 22, hy + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 255), 2, cv2.LINE_AA)
+
+    # 3. Tactical Header Banner (Top HUD)
+    cv2.rectangle(frame, (0, 0), (800, 64), (16, 20, 16), -1)
+    cv2.line(frame, (0, 64), (800, 64), (45, 60, 45), 2)
+    
+    cv2.putText(frame, "SNYPTR-RAIL // REAL-TIME TARGET CV FEED",
+                (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (255, 255, 255), 2, cv2.LINE_AA)
+    
+    # State Pill
+    cv2.rectangle(frame, (18, 36), (220, 56), (30, 36, 30), -1)
+    cv2.rectangle(frame, (18, 36), (220, 56), status_color, 1)
+    cv2.putText(frame, status_label, (26, 51),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, status_color, 1, cv2.LINE_AA)
+
+    # Latency & FPS Badge
+    perf_text = f"FPS: {fps:.1f} | Latency: {latency_ms:.1f}ms | UART: {port if serial_conn else 'WAITING'}"
+    cv2.putText(frame, perf_text, (240, 51),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200) if serial_conn else (150, 150, 150), 1, cv2.LINE_AA)
+
+    # Wi-Fi badge
+    wifi_color = (0, 255, 60) if wifi_conn else (0, 0, 255)
+    cv2.circle(frame, (765, 30), 6, wifi_color, -1, cv2.LINE_AA)
+    cv2.putText(frame, "WIFI" if wifi_conn else "NO-WIFI", (705, 34),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, wifi_color, 1, cv2.LINE_AA)
+
+    # 4. Diagnostics Telemetry Bar (Bottom HUD)
+    cv2.rectangle(frame, (0, 735), (800, 800), (16, 20, 16), -1)
+    cv2.line(frame, (0, 735), (800, 735), (45, 60, 45), 2)
+
+    diag_text1 = f"DELTA: {delta_px:>3d} px  |  COLOR: {color_px:>3d} px  |  SPAN: {span_x}x{span_y} px  |  CONF: {confidence}%"
+    cv2.putText(frame, diag_text1, (18, 760),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 240, 220), 1, cv2.LINE_AA)
+
+    controls_text = "CONTROLS:  [u] Pop Up & Arm   |   [d] Lower Target   |   [`] Manual Hit   |   [q] Quit"
+    cv2.putText(frame, controls_text, (18, 785),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.44, (140, 180, 140), 1, cv2.LINE_AA)
+
+    return frame
 
 def main():
-    print("Connecting to ESP32 Hotspot at http://192.168.4.1...")
-    last_hit = False
-    last_draw_time = 0
-    consecutive_errs = 0
+    print("=" * 78)
+    print("      SNYPTR-RAIL: HIGH-SPEED CAMERA LIVE FEED & TARGET MONITOR")
+    print("=" * 78)
+    print(f"Connecting to ESP32-P4 Serial Stream on {DEFAULT_COM_PORT} @ {DEFAULT_BAUD} baud...")
+    print(f"Connecting to Pop-Up ESP32 Wi-Fi Hotspot at {ESP32_WIFI_URL}...")
+    print("Controls:")
+    print("  [u] or [0]          : Pop Up & Arm Target (UP,1)")
+    print("  [d]                 : Lower Target (DOWN,1)")
+    print("  [`] (Backtick)      : Manual Hit Override (random voice announcement)")
+    print("  [q] or [Esc]        : Exit Monitor")
+    print("=" * 78, flush=True)
 
-    clear_screen()
+    # Start Background Serial Video Reader
+    threading.Thread(target=p4_serial_reader_thread_func, daemon=True).start()
 
-    while True:
-        try:
-            # Handle interactive keypresses on Windows console
+    # Start Background Wi-Fi Telemetry Reader
+    threading.Thread(target=wifi_telemetry_thread_func, daemon=True).start()
+
+    if HAS_OPENCV:
+        window_name = "SNYPTR-RAIL // Live Camera Feed"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 800, 800)
+
+    try:
+        while True:
+            # Handle Windows Console Keypresses (non-blocking)
             if HAS_MSVCRT and msvcrt.kbhit():
                 ch = msvcrt.getch()
                 try:
-                    ch_str = ch.decode('utf-8', errors='ignore')
+                    ch_str = ch.decode('utf-8', errors='ignore').lower()
                 except Exception:
                     ch_str = ""
 
                 if ch_str in ['`', '~']:
                     trigger_manual_hit_override()
-                elif ch_str.lower() in ['u', '0']:
-                    print("\n[CMD] Raising Target 1 (UP,1)...")
+                elif ch_str in ['u', '0']:
+                    print("\n[CMD] Raising & Arming Target 1 (UP,1)...")
                     send_cmd("UP,1")
-                elif ch_str.lower() == 'd':
+                elif ch_str == 'd':
                     print("\n[CMD] Lowering Target 1 (DOWN,1)...")
                     send_cmd("DOWN,1")
-                elif ch_str.lower() == 'q':
-                    print("\nExiting monitor.")
+                elif ch_str == 'q':
+                    print("\nQuit requested.")
                     break
 
-            data = poll_telemetry()
-            now = time.time()
-
-            if data is not None:
-                consecutive_errs = 0
-                hit = data.get("hit", False)
-                state = data.get("targetState", "DOWN")
-                det_state = data.get("detectorState", state)
-                x = data.get("x", 80)
-                y = data.get("y", 56)
-                dart_px = data.get("dartPixels", 0)
-                
-                # Diagnostic metrics from P4
-                delta_px = data.get("deltaPx", 0)
-                color_px = data.get("colorPx", 0)
-                motion_px = data.get("motionPx", 0)
-                span_x = data.get("spanX", 0)
-                span_y = data.get("spanY", 0)
-                confidence = data.get("confidence", 0)
-                latency_ms = data.get("latencyMs", 0.0)
-                p4_link = data.get("p4Link", False)
-                roi = data.get("roi", {"cx": 400, "cy": 280, "rx": 160, "ry": 150})
-
-                # Refresh display every ~100ms
-                if now - last_draw_time >= 0.10:
-                    last_draw_time = now
-
-                    # Format state color
-                    if hit:
-                        state_str = "\033[92;1m>>> 🎯 TARGET HIT CONFIRMED! <<<\033[0m"
-                    elif state == "UP":
-                        state_str = "\033[96;1mTARGET UP [ARMED & WATCHING ROI]\033[0m"
-                    else:
-                        state_str = "\033[90mTARGET DOWN [DETECTION LOCKED]\033[0m"
-
-                    p4_badge = "\033[92m● ONLINE (UART 115200)\033[0m" if p4_link else "\033[91m○ WAITING LINK\033[0m"
-                    
-                    # Signal status tags
-                    s1_tag = "\033[92mPASS\033[0m" if delta_px >= 18 else "\033[90mIDLE\033[0m"
-                    s2_tag = "\033[92mPASS\033[0m" if color_px >= 12 else "\033[90mIDLE\033[0m"
-                    s3_tag = "\033[92mPASS\033[0m" if motion_px >= 14 else "\033[90mIDLE\033[0m"
-                    
-                    is_compact = (span_x <= 90 and span_y <= 90 and span_x >= 4 and span_y >= 4)
-                    s4_tag = "\033[92mCOMPACT\033[0m" if is_compact else ("\033[93mSCATTERED\033[0m" if (span_x > 90 or span_y > 90) else "\033[90mNONE\033[0m")
-
-                    sys.stdout.write("\033[H") # Move cursor to top-left
-                    output = [
-                        "=" * 78,
-                        "   🎯 SNYPTR-RAIL: HIGH-SPEED DETERMINISTIC EVENT DETECTION MONITOR",
-                        "=" * 78,
-                        f" Target Servo State : {state_str:<40}",
-                        f" P4 Camera Link     : {p4_badge:<35} | Latency: \033[93m{latency_ms:.1f} ms\033[0m",
-                        f" Fixed Camera ROI   : Center ({roi.get('cx',400)}, {roi.get('cy',280)}) | Rx={roi.get('rx',160)}, Ry={roi.get('ry',150)} px",
-                        "-" * 78,
-                        " LIVE DETECTOR SIGNALS (WATCHING OPTIMAL BLACK TARGET ZONE):",
-                        f"  [1] Ref Pixel Delta : {render_gauge(delta_px, 60, 16, 18)} px (Thresh: 18)   [{s1_tag}]",
-                        f"  [2] Orange/Yellow   : {render_gauge(color_px, 60, 16, 12)} px (Thresh: 12)   [{s2_tag}]",
-                        f"  [3] Temporal Motion : {render_gauge(motion_px, 60, 16, 14)} px (Thresh: 14)   [{s3_tag}]",
-                        f"  [4] Spatial Cluster : Span: {span_x:>2d} x {span_y:>2d} px (Max: 90x90 px)   [{s4_tag}]",
-                        "-" * 78,
-                        f" Impact Position    : ({x:3d}, {y:3d}) | Cluster Mass: {dart_px} px | Conf: {confidence}%",
-                    ]
-
-                    if hit:
-                        output.append(f" Verdict            : \033[92;1m🎯 HIT CONFIRMED! Servo reversed to DOWN (Latency: {latency_ms:.1f}ms)\033[0m")
-                    elif state == "UP":
-                        output.append(f" Verdict            : \033[96mARMED — Watching optimal zone for Nerf projectile entrance...\033[0m")
-                    else:
-                        output.append(f" Verdict            : \033[90mSTANDBY — Target concealed. Ready for [u] or [0] to pop up.\033[0m")
-
-                    output.append("-" * 78)
-                    output.append(" Controls: [0/u] Pop Up & Arm  |  [d] Lower Target  |  [`] Manual Hit  |  [q] Quit")
-                    output.append("=" * 78)
-                    
-                    sys.stdout.write("\n".join(output) + "\n")
-                    sys.stdout.flush()
-
-                if hit and not last_hit:
-                    phrase = random.choice(HIT_PHRASES)
-                    speak_phrase_async(phrase)
-                last_hit = hit
+            # Render GUI Window
+            if HAS_OPENCV:
+                canvas = render_tactical_canvas()
+                cv2.imshow(window_name, canvas)
+                key = cv2.waitKey(20) & 0xFF
+                if key == ord('q') or key == 27: # 'q' or ESC
+                    print("\nQuit key pressed.")
+                    break
+                elif key == ord('u') or key == ord('0'):
+                    print("\n[CMD] Raising & Arming Target 1 (UP,1)...")
+                    send_cmd("UP,1")
+                elif key == ord('d'):
+                    print("\n[CMD] Lowering Target 1 (DOWN,1)...")
+                    send_cmd("DOWN,1")
+                elif key in [ord('`'), ord('~'), ord(' ')]:
+                    trigger_manual_hit_override()
             else:
-                consecutive_errs += 1
-                if consecutive_errs % 15 == 0:
-                    sys.stdout.write(f"\rWaiting for Wi-Fi connection to ESP32_Camera at {ESP32_HOST}...\033[K")
-                    sys.stdout.flush()
+                time.sleep(0.05)
 
-            time.sleep(0.04)
-
-        except KeyboardInterrupt:
-            print("\nMonitor stopped.")
-            break
-        except Exception as e:
-            time.sleep(0.3)
+    except KeyboardInterrupt:
+        print("\nMonitor stopped.")
+    finally:
+        if HAS_OPENCV:
+            cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
