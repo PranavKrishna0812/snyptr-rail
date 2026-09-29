@@ -82,6 +82,7 @@ const int SERVO_DOWN_DELAY = 2; // Decreased downfall speed by 50% (stepDelay = 
 
 int currentPos[7] = {350, 350, 350, 350, 350, 350, 350};
 String targetStateStr = "DOWN";
+volatile bool g_permanentUp = false; // Permanent UP mode: target stays upright continuously when hit!
 
 // Live Hit & Diagnostic Telemetry State (sent to Laptop Dashboard over Wi-Fi)
 volatile bool g_hitActive = false;
@@ -134,6 +135,39 @@ void executeCommand(String line, bool fromP4 = false) {
   line.trim();
   if (line.length() == 0) return;
 
+  // Permanent UP mode toggle / commands
+  if (line == "PERM_UP,1" || line == "PERM_UP_ON" || line == "PERM_UP") {
+    g_permanentUp = true;
+    if (targetStateStr != "UP") {
+      g_hitActive = false;
+      targetStateStr = "UP";
+      g_targetUpTimestampMs = millis();
+      moveServoSmooth(0, SERVO_UP, 3);
+      delay(400);
+      Serial2.println("ARM,1");
+    }
+    Serial.println("PERM_UP_CONFIRMED,1");
+    return;
+  }
+  if (line == "PERM_UP,0" || line == "PERM_UP_OFF") {
+    g_permanentUp = false;
+    Serial.println("PERM_UP_CONFIRMED,0");
+    return;
+  }
+  if (line == "TOGGLE_PERM_UP") {
+    g_permanentUp = !g_permanentUp;
+    if (g_permanentUp && targetStateStr != "UP") {
+      g_hitActive = false;
+      targetStateStr = "UP";
+      g_targetUpTimestampMs = millis();
+      moveServoSmooth(0, SERVO_UP, 3);
+      delay(400);
+      Serial2.println("ARM,1");
+    }
+    Serial.println(g_permanentUp ? "PERM_UP_CONFIRMED,1" : "PERM_UP_CONFIRMED,0");
+    return;
+  }
+
   // If P4 sends raw "DOWN,1" before "HIT,1,...", ignore raw "DOWN,1" on Serial2
   if (fromP4 && line.startsWith("DOWN,")) {
     return;
@@ -165,16 +199,24 @@ void executeCommand(String line, bool fromP4 = false) {
     g_hitActive = true;
     g_hitTimestampMs = now;
 
-    // Immediately drop Target 1 servo smoothly (50% slower downfall speed)!
-    moveServoSmooth(0, SERVO_DOWN, SERVO_DOWN_DELAY);
-    targetStateStr = "DOWN";
-    g_diagDetectorState = "HIT_LOCKED";
+    if (g_permanentUp) {
+      // In Permanent UP mode: TARGET STAYS UP! DO NOT DROP SERVO!
+      targetStateStr = "UP";
+      g_diagDetectorState = "HIT_CONFIRMED";
+      Serial.printf("[P4 -> POP] 🎯 CONFIRMED HIT (%d px at %d,%d) -> PERMANENT UP MODE: TARGET STAYS UP!\n",
+                    g_hitPixels, g_hitX, g_hitY);
+    } else {
+      // Normal pop-up mode: Immediately drop Target 1 servo smoothly (50% slower downfall speed)!
+      moveServoSmooth(0, SERVO_DOWN, SERVO_DOWN_DELAY);
+      targetStateStr = "DOWN";
+      g_diagDetectorState = "HIT_LOCKED";
 
-    // Tell P4 target is DOWN so detection locks immediately
-    Serial2.println("DISARM,1");
+      // Tell P4 target is DOWN so detection locks immediately
+      Serial2.println("DISARM,1");
 
-    Serial.printf("[P4 -> POP] 🎯 CONFIRMED HIT (%d px at %d,%d) -> TARGET DROPPED IMMEDIATELY!\n",
-                  g_hitPixels, g_hitX, g_hitY);
+      Serial.printf("[P4 -> POP] 🎯 CONFIRMED HIT (%d px at %d,%d) -> TARGET DROPPED IMMEDIATELY!\n",
+                    g_hitPixels, g_hitX, g_hitY);
+    }
     return;
   }
 
@@ -230,6 +272,7 @@ void executeCommand(String line, bool fromP4 = false) {
   }
   // 5. Lower Target: "DOWN,1" or "DOWN,ALL" (from Wi-Fi Dashboard / USB / ESP-NOW)
   else if (line.startsWith("DOWN,")) {
+    g_permanentUp = false; // Manual down exits permanent up mode
     String idStr = line.substring(5);
     Serial2.println("DISARM,1"); // Immediately disarm P4 detection!
     if (idStr == "ALL") {
@@ -383,6 +426,8 @@ void setup() {
     json += "\"orangePx\":" + String(g_diagColorPx / 3) + ",";
     json += "\"darkPct\":98.5,";
     json += "\"p4Link\":" + String(p4Link ? "true" : "false") + ",";
+    json += "\"permanentUp\":" + String(g_permanentUp ? "true" : "false") + ",";
+    json += "\"permUp\":" + String(g_permanentUp ? "true" : "false") + ",";
     json += "\"zone\":\"OPTIMAL\",";
     json += "\"targetState\":\"" + targetStateStr + "\",";
     json += "\"roi\":{\"cx\":400,\"cy\":280,\"rx\":160,\"ry\":150},";
@@ -412,6 +457,14 @@ void setup() {
 void loop() {
   // 1. Handle Wi-Fi HTTP requests from Laptop Dashboard
   server.handleClient();
+
+  // Auto-rearm in Permanent Up mode:
+  // After hit indicator cooldown (1.5s), clear hit and tell P4 to re-arm baseline
+  if (g_permanentUp && g_hitActive && (millis() - g_hitTimestampMs > 1500)) {
+    g_hitActive = false;
+    Serial2.println("ARM,1");
+    Serial.println("[POP] 🎯 Permanent Up mode: Baseline re-calibrated & ARMED for next shot!");
+  }
 
   // 2. Non-blocking read from ESP32-P4 on Serial2 (GPIO 16) with timeout guard
   static char s2_buf[128];

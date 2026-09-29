@@ -627,16 +627,30 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
             int d_ref = abs(r - ref_r) + abs(g - ref_g) + abs(b - ref_b);
             int gain = (r + g + b) - (ref_r + ref_g + ref_b);
 
-            // Nerf projectile chromaticity characteristics
-            bool is_yellow = ((r + g >= 155) && (b <= 90) && (r >= b + 18) && (g >= b + 10));
-            bool is_orange = ((r >= 115) && (g >= 35) && (b <= 80) && (r >= g + 18) && (r >= b + 25));
+            // Compute pixel chromaticity (saturation / colorfulness)
+            int max_c = r; if (g > max_c) max_c = g; if (b > max_c) max_c = b;
+            int min_c = r; if (g < min_c) min_c = g; if (b < min_c) min_c = b;
+            int chroma = max_c - min_c;
 
-            bool is_changed = (is_yellow || is_orange) || (d_ref >= 42 && gain >= 28);
-            if (is_changed) {
+            // GLARE & AMBIENT LIGHT REJECTION:
+            // Specular reflections and light bounces off black/neutral surfaces are achromatic (R ~= G ~= B).
+            // Reject any low-chroma pixel (chroma < 32) so ambient light bounces can NEVER register as dart hits!
+            if (chroma < 32) {
+                continue;
+            }
+
+            // Nerf projectile chromaticity characteristics
+            // 1. Yellow foam dart: high red & green, low blue, strong chroma
+            bool is_yellow = ((r + g >= 160) && (b <= 85) && (r >= b + 25) && (g >= b + 15) && (chroma >= 38));
+            // 2. Orange tip / body: high red, moderate green, low blue, strong chroma
+            bool is_orange = ((r >= 115) && (g >= 35) && (b <= 80) && (r >= g + 20) && (r >= b + 28) && (chroma >= 40));
+            // 3. Other vibrant darts (e.g. Elite blue foam, neon green):
+            bool is_vibrant = (chroma >= 45 && d_ref >= 48 && gain >= 26);
+
+            bool is_dart_px = (is_yellow || is_orange || is_vibrant);
+            if (is_dart_px) {
                 changed_px_count++;
-                if (is_yellow || is_orange) {
-                    color_count++;
-                }
+                color_count++;
                 if (x < min_x) min_x = x;
                 if (x > max_x) max_x = x;
                 if (y < min_y) min_y = y;
@@ -652,6 +666,18 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
     float cx = (changed_px_count > 0) ? ((float)sum_x / (float)changed_px_count) : 400.0f;
     float cy = (changed_px_count > 0) ? ((float)sum_y / (float)changed_px_count) : 400.0f;
 
+    // Spatial Cluster Verification:
+    // A Nerf projectile impact is a tight, localized cluster (10px to 160px span).
+    // Ambient shadows or diffuse reflections span across wide portions of the 800x800 frame.
+    int box_cols = (span_x / FULL_ROI_STEP) + 1;
+    int box_rows = (span_y / FULL_ROI_STEP) + 1;
+    int box_pts = box_cols * box_rows;
+    float density = (box_pts > 0) ? ((float)changed_px_count / (float)box_pts) : 0.0f;
+
+    bool is_compact_cluster = (span_x >= 10 && span_x <= 160 &&
+                               span_y >= 10 && span_y <= 160 &&
+                               density >= 0.12f);
+
     *out_x = cx;
     *out_y = cy;
     *out_delta = (int)changed_px_count;
@@ -662,18 +688,17 @@ static bool process_target_event_frame(const uint16_t *pixels, int width, int he
     int confidence = 0;
 
     // Direct Hit Detection:
-    // When a Nerf projectile strikes/enters, a large amount of pixels changes!
-    // Large impact: >= 70 sample points (each point is 16 full image pixels -> 1,120+ pixels!)
-    if (changed_px_count >= 70) {
+    // 1. Large impact: >= 40 sample points (640+ image pixels) with compact cluster
+    if (changed_px_count >= 40 && is_compact_cluster) {
         hit_confirmed = true;
         confidence = 100;
     }
-    // Moderate impact: >= 35 sample points (560+ pixels) persisting for 2 frames
-    else if (changed_px_count >= 35) {
+    // 2. Moderate impact: >= 25 sample points (400+ image pixels) persisting for 2 frames
+    else if (changed_px_count >= 25 && is_compact_cluster) {
         if (s_consec_hit_frames >= 1) {
             float dx = cx - s_last_hit_cx;
             float dy = cy - s_last_hit_cy;
-            if ((dx * dx + dy * dy) <= (50.0f * 50.0f)) {
+            if ((dx * dx + dy * dy) <= (60.0f * 60.0f)) {
                 hit_confirmed = true;
                 confidence = 95;
             }

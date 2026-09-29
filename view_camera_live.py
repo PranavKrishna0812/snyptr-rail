@@ -112,6 +112,7 @@ class SharedMonitorState:
         self.confidence = 0
         self.latency_ms = 0.0
         self.last_hit_timestamp = 0.0
+        self.permanent_up = False
 
 g_state = SharedMonitorState()
 
@@ -135,6 +136,7 @@ def wifi_telemetry_thread_func():
                 g_state.span_y = data.get("spanY", 0)
                 g_state.confidence = data.get("confidence", 0)
                 g_state.latency_ms = data.get("latencyMs", 0.0)
+                g_state.permanent_up = data.get("permanentUp", data.get("permUp", False))
 
                 # Scale coordinates if hit reported
                 if g_state.hit:
@@ -265,6 +267,15 @@ def trigger_manual_hit_override():
     print(f"\n\033[92m[🎯 MANUAL OVERRIDE (`)] {phrase} | Target LOWERED (DOWN,1) -> {res}\033[0m")
     speak_phrase_async(phrase)
 
+def toggle_permanent_up():
+    with g_state.lock:
+        new_state = not g_state.permanent_up
+        g_state.permanent_up = new_state
+    cmd = "PERM_UP,1" if new_state else "PERM_UP,0"
+    res = send_cmd(cmd)
+    status_str = "ENABLED (Target stays upright continuously)" if new_state else "DISABLED (Target drops on hit)"
+    print(f"\n\033[93m[🎯 PERMANENT UP] Mode set to {status_str} ({cmd}) -> {res}\033[0m")
+
 def render_tactical_canvas():
     """Draws a high-tech tactical HUD overlay on the camera frame or synthetic canvas."""
     with g_state.lock:
@@ -285,6 +296,7 @@ def render_tactical_canvas():
         serial_conn = g_state.serial_connected
         port = g_state.serial_port
         wifi_conn = g_state.wifi_connected
+        perm_up = g_state.permanent_up
 
     # If no physical camera frame received yet, create an 800x800 dark canvas
     if frame is None:
@@ -363,6 +375,14 @@ def render_tactical_canvas():
     cv2.putText(frame, perf_text, (240, 51),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 200) if serial_conn else (150, 150, 150), 1, cv2.LINE_AA)
 
+    # Permanent Up Pill (Top Right)
+    perm_color = (0, 255, 255) if perm_up else (80, 100, 80)
+    perm_label = "PERM UP: [ON]" if perm_up else "PERM UP: [OFF]"
+    cv2.rectangle(frame, (550, 36), (690, 56), (28, 36, 28), -1)
+    cv2.rectangle(frame, (550, 36), (690, 56), perm_color, 1)
+    cv2.putText(frame, perm_label, (558, 51),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, perm_color, 1, cv2.LINE_AA)
+
     # Wi-Fi badge
     wifi_color = (0, 255, 60) if wifi_conn else (0, 0, 255)
     cv2.circle(frame, (765, 30), 6, wifi_color, -1, cv2.LINE_AA)
@@ -377,9 +397,9 @@ def render_tactical_canvas():
     cv2.putText(frame, diag_text1, (18, 760),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 240, 220), 1, cv2.LINE_AA)
 
-    controls_text = "CONTROLS:  [u] Pop Up & Arm   |   [d] Lower Target   |   [`] Manual Hit   |   [q] Quit"
+    controls_text = "CONTROLS:  [u] Pop Up & Arm  |  [d] Lower  |  [p] Perm Up  |  [`] Hit Override  |  [q] Quit"
     cv2.putText(frame, controls_text, (18, 785),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.44, (140, 180, 140), 1, cv2.LINE_AA)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.43, (140, 180, 140), 1, cv2.LINE_AA)
 
     return frame
 
@@ -392,6 +412,7 @@ def main():
     print("Controls:")
     print("  [u] or [0]          : Pop Up & Arm Target (UP,1)")
     print("  [d]                 : Lower Target (DOWN,1)")
+    print("  [p]                 : Toggle Permanent Up Mode (Target stays upright on hit)")
     print("  [`] (Backtick)      : Manual Hit Override (random voice announcement)")
     print("  [q] or [Esc]        : Exit Monitor")
     print("=" * 78, flush=True)
@@ -425,6 +446,8 @@ def main():
                 elif ch_str == 'd':
                     print("\n[CMD] Lowering Target 1 (DOWN,1)...")
                     send_cmd("DOWN,1")
+                elif ch_str == 'p':
+                    toggle_permanent_up()
                 elif ch_str == 'q':
                     print("\nQuit requested.")
                     break
@@ -443,6 +466,8 @@ def main():
                 elif key == ord('d'):
                     print("\n[CMD] Lowering Target 1 (DOWN,1)...")
                     send_cmd("DOWN,1")
+                elif key in [ord('p'), ord('P')]:
+                    toggle_permanent_up()
                 elif key in [ord('`'), ord('~'), ord(' ')]:
                     trigger_manual_hit_override()
             else:
