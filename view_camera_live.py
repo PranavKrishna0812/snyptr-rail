@@ -302,44 +302,48 @@ def render_tactical_canvas():
         cv2.putText(frame, "Connect ESP32-P4 USB cable & flash standalone firmware.",
                     (110, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 180, 160), 1, cv2.LINE_AA)
 
-    # 1. Draw Optimal Target ROI Ellipse (Center 400,240, Rx=140, Ry=130)
+    # 1. Full-Frame Active Target Region Corners (Corner Brackets)
     if hit:
-        roi_color = (0, 0, 255) # Bright Red on HIT
-        roi_thickness = 4
+        border_color = (0, 0, 255) # Bright Red on HIT
         status_label = "HIT CONFIRMED!"
         status_color = (0, 0, 255)
     elif target_state == "UP" and detector_state == "ARMED":
-        roi_color = (0, 255, 60) # High-visibility Green when ARMED
-        roi_thickness = 3
-        status_label = "DETECTION ARMED"
+        border_color = (0, 255, 60) # High-visibility Green when ARMED
+        status_label = "DETECTION ARMED (FULL FRAME)"
         status_color = (0, 255, 60)
     elif target_state == "UP":
-        roi_color = (0, 220, 255) # Yellow when CALIBRATING / RISING
-        roi_thickness = 2
-        status_label = "CALIBRATING BASELINE"
+        border_color = (0, 220, 255) # Yellow when CALIBRATING / RISING
+        status_label = "CALIBRATING FULL FRAME"
         status_color = (0, 220, 255)
     else:
-        roi_color = (120, 120, 120) # Gray when DOWN
-        roi_thickness = 2
+        border_color = (80, 80, 80) # Gray when DOWN
         status_label = "TARGET DOWN (IDLE)"
         status_color = (160, 160, 160)
 
-    # Draw ROI Ellipse
-    cv2.ellipse(frame, (ROI_CX, ROI_CY), (ROI_RX, ROI_RY), 0, 0, 360, roi_color, roi_thickness, cv2.LINE_AA)
-    # Reticle crosshair inside ROI
-    cv2.line(frame, (ROI_CX - 15, ROI_CY), (ROI_CX + 15, ROI_CY), roi_color, 1, cv2.LINE_AA)
-    cv2.line(frame, (ROI_CX, ROI_CY - 15), (ROI_CX, ROI_CY + 15), roi_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, "OPTIMAL ZONE", (ROI_CX - 62, ROI_CY - ROI_RY - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.50, roi_color, 1, cv2.LINE_AA)
+    # Tactical corner brackets around active frame
+    b_len = 40
+    # Top-Left
+    cv2.line(frame, (30, 80), (30 + b_len, 80), border_color, 2, cv2.LINE_AA)
+    cv2.line(frame, (30, 80), (30, 80 + b_len), border_color, 2, cv2.LINE_AA)
+    # Top-Right
+    cv2.line(frame, (770, 80), (770 - b_len, 80), border_color, 2, cv2.LINE_AA)
+    cv2.line(frame, (770, 80), (770, 80 + b_len), border_color, 2, cv2.LINE_AA)
+    # Bottom-Left
+    cv2.line(frame, (30, 720), (30 + b_len, 720), border_color, 2, cv2.LINE_AA)
+    cv2.line(frame, (30, 720), (30, 720 - b_len), border_color, 2, cv2.LINE_AA)
+    # Bottom-Right
+    cv2.line(frame, (770, 720), (770 - b_len, 720), border_color, 2, cv2.LINE_AA)
+    cv2.line(frame, (770, 720), (770, 720 - b_len), border_color, 2, cv2.LINE_AA)
+    # Center reticle mark
+    cv2.drawMarker(frame, (400, 400), (35, 50, 35), cv2.MARKER_CROSS, 24, 1)
 
-    # 2. Draw Hit / Detected Projectile Indicator
-    if hit or (span_x > 0 and span_y > 0):
-        # Draw bounding box and crosshair
-        hx, hy = max(10, min(790, hit_x)), max(10, min(790, hit_y))
-        cv2.circle(frame, (hx, hy), 18, (0, 0, 255), 2, cv2.LINE_AA)
-        cv2.circle(frame, (hx, hy), 4, (0, 180, 255), -1, cv2.LINE_AA)
-        cv2.putText(frame, f"IMPACT ({hx},{hy})", (hx + 22, hy + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 255), 2, cv2.LINE_AA)
+    # 2. Draw Hit / Detected Projectile Indicator (ONLY WHEN CONFIRMED HIT)
+    if hit:
+        hx, hy = max(20, min(780, hit_x)), max(20, min(780, hit_y))
+        cv2.circle(frame, (hx, hy), 30, (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.circle(frame, (hx, hy), 6, (0, 200, 255), -1, cv2.LINE_AA)
+        cv2.putText(frame, f"IMPACT ({hx},{hy})", (hx + 35, hy + 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
 
     # 3. Tactical Header Banner (Top HUD)
     cv2.rectangle(frame, (0, 0), (800, 64), (16, 20, 16), -1)
