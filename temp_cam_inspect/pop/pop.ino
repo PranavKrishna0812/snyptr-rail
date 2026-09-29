@@ -289,6 +289,7 @@ void executeCommand(String line, bool fromP4 = false) {
     g_permanentUp = false; // Manual down exits permanent up mode
     Serial2.println("PERM_UP,0"); // Forward disarm to P4!
     Serial2.println("DISARM,1"); // Immediately disarm P4 detection!
+    String idStr = line.substring(5);
     if (idStr == "ALL") {
       for (int channel = 0; channel < 7; channel++) {
         moveServoSmooth(channel, SERVO_DOWN, SERVO_DOWN_DELAY);
