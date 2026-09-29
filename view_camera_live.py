@@ -104,40 +104,48 @@ g_laser_was_present = False
 
 def detect_orange_tip_hsv(warped_img):
     """
-    Detects the bright Orange Rubber Tip of a Nerf bullet in HSV color space.
+    Detects the bright Orange/Red Rubber Tip of a Nerf bullet in HSV and RGB color space.
+    Strictly filters out specular glare and ambient light reflections.
     Returns (wpx, wpy) centroid of the orange tip in image space, or None if not present.
     """
-    if warped_img is None:
+    if warped_img is None or not HAS_OPENCV:
         return None
         
-    hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
     h_img, w_img = warped_img.shape[:2]
+    hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
+    b, g, r = cv2.split(warped_img)
     
-    # Bright Vibrant Orange Tip HSV Range (Hue 4 to 22 / 165 to 180, Sat >= 110, Val >= 110)
-    lower_orange1 = np.array([4, 110, 110])
-    upper_orange1 = np.array([22, 255, 255])
-    lower_orange2 = np.array([165, 110, 110])
-    upper_orange2 = np.array([180, 255, 255])
+    # 1. Vibrant Orange/Red Tip HSV Range (Hue 0..14 or 166..180, Sat >= 130, Val >= 80)
+    m1 = cv2.inRange(hsv, np.array([0, 130, 80]), np.array([14, 255, 255]))
+    m2 = cv2.inRange(hsv, np.array([166, 130, 80]), np.array([180, 255, 255]))
+    tip_mask = cv2.bitwise_or(m1, m2)
     
-    m1 = cv2.inRange(hsv, lower_orange1, upper_orange1)
-    m2 = cv2.inRange(hsv, lower_orange2, upper_orange2)
-    orange_mask = cv2.bitwise_or(m1, m2)
+    # 2. Strict Specular Glare & Ambient Reflection Rejection:
+    # Light reflections and room glare have neutral high Blue (B >= 55) and low chromatic difference (R - G < 80).
+    # Genuine Nerf rubber tip has virtually zero blue (B <= 45), strong red (R >= 155),
+    # and large chromatic difference (R - G >= 80, R - B >= 100).
+    no_glare = (b <= 45) & (g <= 90) & (r >= 155) & \
+               ((r.astype(np.int16) - g.astype(np.int16)) >= 80) & \
+               ((r.astype(np.int16) - b.astype(np.int16)) >= 100)
+    tip_mask = cv2.bitwise_and(tip_mask, no_glare.astype(np.uint8) * 255)
     
-    # Restrict search area to inner target card area (40, 40) to (w_img - 40, h_img - 70)
-    target_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-    cv2.rectangle(target_mask, (40, 40), (w_img - 40, h_img - 70), 255, -1)
-    orange_mask = cv2.bitwise_and(orange_mask, target_mask)
+    # 3. Inner boundary margin (ignore extreme edge pixels)
+    margin_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+    cv2.rectangle(margin_mask, (15, 15), (w_img - 15, h_img - 15), 255, -1)
+    tip_mask = cv2.bitwise_and(tip_mask, margin_mask)
     
-    kernel3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    orange_mask = cv2.morphologyEx(orange_mask, cv2.MORPH_OPEN, kernel3)
+    # 4. Clean noise with 5x5 morphological opening
+    kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    tip_mask = cv2.morphologyEx(tip_mask, cv2.MORPH_OPEN, kernel5)
     
-    contours, _ = cv2.findContours(orange_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(tip_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     best_cnt = None
     best_area = 0
+    # Allow area from 200 px (distant bullet) up to 350,000 px (zoomed-in / close-up dart)
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 80 <= area <= 25000:
+        if 200 <= area <= 350000:
             if area > best_area:
                 best_area = area
                 best_cnt = cnt
@@ -153,79 +161,53 @@ def detect_orange_tip_hsv(warped_img):
 
 def detect_laser_hsv(warped_img):
     """
-    Robustly detects an intensely bright red laser dot in HSV color space.
-    Returns (wpx, wpy) in image space, or None if not found.
+    Deprecated / disabled laser dot detector to prevent specular glare false positives.
+    Kept for interface compatibility; returns None.
     """
-    if warped_img is None:
-        return None
-        
-    hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
-    
-    # Red laser hue ranges - require ultra high saturation (S>=180) and brightness (V>=220) to prevent table reflections
-    lower_red1 = np.array([0, 180, 220])
-    upper_red1 = np.array([12, 255, 255])
-    lower_red2 = np.array([168, 180, 220])
-    upper_red2 = np.array([180, 255, 255])
-    
-    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-    red_mask = cv2.bitwise_or(mask1, mask2)
-    
-    h_img, w_img = warped_img.shape[:2]
-    target_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-    cv2.rectangle(target_mask, (40, 40), (w_img - 40, h_img - 70), 255, -1)
-    red_mask = cv2.bitwise_and(red_mask, target_mask)
-    
-    contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    best_pt = None
-    best_area = 0
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if 1.0 <= area <= 300:
-            if area > best_area:
-                best_area = area
-                M = cv2.moments(cnt)
-                if M["m00"] > 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    best_pt = (cx, cy)
-                    
-    return best_pt
+    return None
 
 def detect_nerf_dart_hsv(warped_img):
     """
-    Unified Nerf Dart & Orange Tip Detector.
-    Detects yellow/orange Nerf dart on the target card and pinpoints the Orange Rubber Tip.
-    Returns (wpx, wpy) centroid of the Orange Rubber Tip (pin location) in image space.
+    Unified Nerf Dart (Yellow/Gold foam body + Orange/Red rubber tip) Detector.
+    Detects the physical Nerf dart body and pinpoints the Orange Rubber Tip centroid.
+    Strictly filters out specular reflections and room lighting glare.
+    Returns (wpx, wpy) centroid of the Orange Rubber Tip in image space, or None.
     """
-    if warped_img is None:
+    if warped_img is None or not HAS_OPENCV:
         return None
         
-    hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
     h_img, w_img = warped_img.shape[:2]
+    hsv = cv2.cvtColor(warped_img, cv2.COLOR_BGR2HSV)
+    b, g, r = cv2.split(warped_img)
     
-    # 1. Unified Yellow/Gold/Orange Nerf Dart Range (Hue 3 to 42, Sat >= 35, Val >= 35)
-    lower_nerf1 = np.array([3, 35, 35])
-    upper_nerf1 = np.array([42, 255, 255])
-    lower_nerf2 = np.array([160, 35, 35])
-    upper_nerf2 = np.array([180, 255, 255])
-    
-    m1 = cv2.inRange(hsv, lower_nerf1, upper_nerf1)
-    m2 = cv2.inRange(hsv, lower_nerf2, upper_nerf2)
+    # 1. Broad Nerf Dart Mask (Yellow/Gold foam + Orange/Red rubber tip)
+    # Hue: 0..38 or 166..180, Sat >= 85, Val >= 70
+    m1 = cv2.inRange(hsv, np.array([0, 85, 70]), np.array([38, 255, 255]))
+    m2 = cv2.inRange(hsv, np.array([166, 85, 70]), np.array([180, 255, 255]))
     dart_mask = cv2.bitwise_or(m1, m2)
     
+    # Glare & reflection rejection:
+    # Ambient reflections on table/target have high Blue (B >= 70) and low R-B.
+    # Genuine Nerf dart foam & rubber tip have very low Blue (B <= 65) and high Red (R >= 130).
+    no_glare = (b <= 65) & (r >= 130) & ((r.astype(np.int16) - b.astype(np.int16)) >= 60)
+    dart_mask = cv2.bitwise_and(dart_mask, no_glare.astype(np.uint8) * 255)
+    
+    # Inner boundary margin
     target_mask = np.zeros((h_img, w_img), dtype=np.uint8)
     cv2.rectangle(target_mask, (15, 15), (w_img - 15, h_img - 15), 255, -1)
     dart_mask = cv2.bitwise_and(dart_mask, target_mask)
+    
+    kernel5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    dart_mask = cv2.morphologyEx(dart_mask, cv2.MORPH_OPEN, kernel5)
     
     contours, _ = cv2.findContours(dart_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     best_cnt = None
     best_area = 0
+    # Accommodates close-up / zoomed camera views up to 500,000 pixels
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 80 <= area <= 60000:
+        if 350 <= area <= 500000:
             if area > best_area:
                 best_area = area
                 best_cnt = cnt
@@ -236,36 +218,35 @@ def detect_nerf_dart_hsv(warped_img):
     dart_roi_mask = np.zeros((h_img, w_img), dtype=np.uint8)
     cv2.drawContours(dart_roi_mask, [best_cnt], -1, 255, -1)
     
-    # 2. Pinpoint Orange Rubber Tip inside the dart (Hue 0..18 or 165..180)
-    orange_only_mask = cv2.bitwise_or(
-        cv2.inRange(hsv, np.array([0, 45, 45]), np.array([18, 255, 255])),
-        cv2.inRange(hsv, np.array([165, 45, 45]), np.array([180, 255, 255]))
+    # 2. Pinpoint Orange/Red Rubber Tip inside the dart
+    tip_color = (b <= 45) & (g <= 90) & (r >= 155) & ((r.astype(np.int16) - g.astype(np.int16)) >= 80)
+    tip_hsv = cv2.bitwise_or(
+        cv2.inRange(hsv, np.array([0, 130, 80]), np.array([14, 255, 255])),
+        cv2.inRange(hsv, np.array([166, 130, 80]), np.array([180, 255, 255]))
     )
-    orange_in_dart = cv2.bitwise_and(orange_only_mask, dart_roi_mask)
+    tip_mask = cv2.bitwise_and(tip_hsv, tip_color.astype(np.uint8) * 255)
+    tip_in_dart = cv2.bitwise_and(tip_mask, dart_roi_mask)
     
-    contours_o, _ = cv2.findContours(orange_in_dart, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours_o, _ = cv2.findContours(tip_in_dart, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best_o_area = 0
     best_o_pt = None
     for cnt_o in contours_o:
         area_o = cv2.contourArea(cnt_o)
-        if area_o > best_o_area:
+        if area_o > best_o_area and area_o >= 150:
             best_o_area = area_o
             M = cv2.moments(cnt_o)
             if M["m00"] > 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                best_o_pt = (cx, cy)
+                best_o_pt = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
                 
     if best_o_pt is not None:
         return best_o_pt
         
-    M = cv2.moments(best_cnt)
-    if M["m00"] > 0:
-        cx = int(M["m10"] / M["m00"])
-        cy = int(M["m01"] / M["m00"])
-        return (cx, cy)
-        
-    return None
+    # Fallback: apex point of the dart contour closest to reticle center (400, 400)
+    center = np.array([w_img / 2.0, h_img / 2.0])
+    pts = best_cnt.reshape(-1, 2)
+    dists = np.sum((pts - center)**2, axis=1)
+    apex = pts[np.argmin(dists)]
+    return (int(apex[0]), int(apex[1]))
 
 def detect_universal_foreign_object(warped_bgr, warped_gray, bg_warped_bgr=None, bg_warped_gray=None):
     """
@@ -523,16 +504,17 @@ def process_incoming_frame_cv(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # 1. Real-Time Nerf Orange Tip & Laser Detection
-    laser_pt = None
-    if g_bg_warped is not None and (g_target_up_time is None or (time.time() - g_target_up_time > 1.2)):
-        laser_pt = detect_orange_tip_hsv(frame)
-        if laser_pt is None:
-            laser_pt = detect_laser_hsv(frame)
+    # 1. Real-Time Physical Nerf Bullet Detection (Orange Tip & Dart Body)
+    # Strictly ignores room glare / light reflections and never calls detect_laser_hsv
+    bullet_pt = None
+    if g_target_up_time is None or (time.time() - g_target_up_time > 0.8):
+        bullet_pt = detect_orange_tip_hsv(frame)
+        if bullet_pt is None:
+            bullet_pt = detect_nerf_dart_hsv(frame)
 
-    laser_hit_triggered = False
-    if laser_pt is not None:
-        wpx, wpy = laser_pt
+    bullet_hit_triggered = False
+    if bullet_pt is not None:
+        wpx, wpy = bullet_pt
         lx_rel_mm = (wpx - (w_img / 2.0)) / 10.0
         ly_rel_mm = -(wpy - (h_img / 2.0)) / 10.0
 
@@ -541,12 +523,14 @@ def process_incoming_frame_cv(frame):
         zone = 1 if is_hit else 2
 
         if not g_laser_was_present:
+            score_ring = 10 if dist <= 10.0 else 8 if dist <= 20.0 else 5 if dist <= 30.0 else 1
+            is_x = (dist <= 2.0)
             g_shot_info = {
                 "x_mm": lx_rel_mm,
                 "y_mm": ly_rel_mm,
                 "dist": dist,
-                "score_ring": 10 if dist <= 10.0 else 8 if dist <= 20.0 else 5 if dist <= 30.0 else 1,
-                "is_x": (dist <= 2.0),
+                "score_ring": score_ring,
+                "is_x": is_x,
                 "zone": zone,
                 "is_stuck": False,
                 "pixel_coords": (wpx, wpy),
@@ -554,7 +538,8 @@ def process_incoming_frame_cv(frame):
             }
 
             zone_name = "GREEN ZONE - HIT" if zone == 1 else "RED ZONE - MISS"
-            print(f"\n >>> [NERF ORANGE TIP DETECTED] X: {lx_rel_mm:+.2f} mm | Y: {ly_rel_mm:+.2f} mm | Zone: {zone_name}", flush=True)
+            ring_str = "10X" if is_x else f"Ring {score_ring}"
+            print(f"\n >>> [NERF BULLET DETECTED] X: {lx_rel_mm:+.2f} mm | Y: {ly_rel_mm:+.2f} mm | Score: {ring_str} | Zone: {zone_name}", flush=True)
 
             if zone == 1:
                 with g_state.lock:
@@ -569,12 +554,12 @@ def process_incoming_frame_cv(frame):
                 speak_phrase_async(phrase)
 
             g_laser_was_present = True
-        laser_hit_triggered = True
+        bullet_hit_triggered = True
     else:
         g_laser_was_present = False
 
-    # 2. Baseline Background Initialization (Target stationary for 1.2s)
-    if g_bg_warped is None:
+    # 2. Baseline Background Initialization (Target stationary for 1.2s, only when no bullet in frame)
+    if g_bg_warped is None and bullet_pt is None:
         if g_target_up_time is None or (time.time() - g_target_up_time > 1.2):
             g_bg_warped = gray.copy()
             g_bg_warped_bgr = frame.copy()
@@ -582,7 +567,7 @@ def process_incoming_frame_cv(frame):
             with g_state.lock:
                 g_state.detector_state = "ARMED"
             print("[SYSTEM] Baseline Background initialized (Target stationary).", flush=True)
-    elif g_target_active and not laser_hit_triggered:
+    elif g_target_active and not bullet_hit_triggered:
         # Global illumination normalization to cancel camera auto-exposure fluctuations
         mean_bg = np.mean(g_bg_warped)
         mean_curr = np.mean(gray)
@@ -660,7 +645,8 @@ def send_cmd(action):
         g_detector_fsm = STATE_IDLE
         g_impact_frames = []
         with g_state.lock:
-            g_state.hit = False
+            if (time.time() - g_state.last_hit_timestamp) >= 2.5:
+                g_state.hit = False
             g_state.target_state = "DOWN"
             g_state.detector_state = "DOWN"
 
@@ -800,8 +786,22 @@ def wifi_telemetry_thread_func():
             
             with g_state.lock:
                 g_state.wifi_connected = True
-                g_state.hit = data.get("hit", False)
-                g_state.target_state = data.get("targetState", "UNKNOWN")
+                wifi_hit = data.get("hit", False)
+                now_ts = time.time()
+                if wifi_hit:
+                    g_state.hit = True
+                    g_state.hit_x = int(data.get("x", 80) * (800 / 160))
+                    g_state.hit_y = int(data.get("y", 48) * (800 / 160))
+                    g_state.hit_pixels = data.get("dartPixels", 0)
+                    if not last_hit_reported:
+                        g_state.last_hit_timestamp = now_ts
+                elif (now_ts - g_state.last_hit_timestamp) >= 2.5:
+                    g_state.hit = False
+
+                t_state = data.get("targetState", "UNKNOWN")
+                g_state.target_state = t_state
+                if t_state == "UP":
+                    g_target_active = True
                 g_state.detector_state = data.get("detectorState", "DOWN")
                 g_state.delta_px = data.get("deltaPx", 0)
                 g_state.color_px = data.get("colorPx", 0)
@@ -812,20 +812,11 @@ def wifi_telemetry_thread_func():
                 if "permanentUp" in data or "permUp" in data:
                     g_state.permanent_up = data.get("permanentUp", data.get("permUp", False))
 
-                # Scale coordinates if hit reported
-                if g_state.hit:
-                    # x and y from telemetry are scaled to 160x160; scale up to 800x800
-                    g_state.hit_x = int(data.get("x", 80) * (800 / 160))
-                    g_state.hit_y = int(data.get("y", 48) * (800 / 160))
-                    g_state.hit_pixels = data.get("dartPixels", 0)
-                    if not last_hit_reported:
-                        g_state.last_hit_timestamp = time.time()
-
-            if g_state.hit and not last_hit_reported:
+            if wifi_hit and not last_hit_reported:
                 phrase = random.choice(HIT_PHRASES)
                 speak_phrase_async(phrase)
                 last_hit_reported = True
-            elif not g_state.hit:
+            elif not wifi_hit:
                 last_hit_reported = False
 
             time.sleep(0.08)
@@ -1016,8 +1007,11 @@ def render_tactical_canvas():
         cropped = frame[y1:y2, x1:x2]
         frame = cv2.resize(cropped, (800, 800), interpolation=cv2.INTER_LINEAR)
 
+    now_ts = time.time()
+    hit_active = hit or ((now_ts - g_state.last_hit_timestamp < 2.5) and g_state.last_hit_timestamp > 0)
+
     # 1. Full-Frame Active Target Region Corners (Corner Brackets)
-    if hit:
+    if hit_active:
         border_color = (0, 0, 255) # Bright Red on HIT
         status_label = "HIT CONFIRMED!"
         status_color = (0, 0, 255)
@@ -1058,7 +1052,7 @@ def render_tactical_canvas():
     cv2.circle(frame, (opt_center_x, opt_center_y), opt_radius, (0, 255, 60), 2, cv2.LINE_AA)
 
     # 2. Draw Hit / Detected Projectile Indicator
-    if hit:
+    if hit_active:
         screen_hx = int((hit_x - x1) * (800.0 / crop_w))
         screen_hy = int((hit_y - y1) * (800.0 / crop_h))
         if 0 <= screen_hx <= 800 and 0 <= screen_hy <= 800:
